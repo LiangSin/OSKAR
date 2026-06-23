@@ -52,6 +52,7 @@ const MOD_LEFT_SHIFT: u8 = 0x02;
 const MOD_LEFT_ALT: u8 = 0x04;
 const MOD_LEFT_GUI: u8 = 0x08;
 const WINDOW_SWITCH_TIMEOUT: Duration = Duration::from_secs(1);
+const ENCODER_STEPS_PER_DETENT: i8 = 4;
 
 const KEYLAYOUT: KeyLayout = KeyLayout {
     encoder_left: KeyType::Combo(KeyCombo {
@@ -194,28 +195,67 @@ unsafe fn SWI_IRQ_0() {
 
 #[embassy_executor::task]
 pub async fn encoder_task(r: EncoderResources) -> ! {
-    let encoder_left: Input<'_> = Input::new(r.encoder_left, Pull::None);
+    let mut encoder_left: Input<'_> = Input::new(r.encoder_left, Pull::None);
 
     let mut encoder_right: Input<'_> = Input::new(r.encoder_right, Pull::None);
 
     let publisher = KEY_EVENT_QUEUE.publisher().unwrap();
+    let mut last_state = encoder_state(&encoder_left, &encoder_right);
+    let mut position: i8 = 0;
 
     loop {
-        encoder_right.wait_for_falling_edge().await;
+        let (_, _) = select_array([
+            encoder_left.wait_for_any_edge(),
+            encoder_right.wait_for_any_edge(),
+        ])
+        .await;
 
-        if encoder_left.get_level() == Level::Low {
-            publisher.publish_immediate(KeyEvent {
-                key: Key::EncoderLeft,
-                event: Event::Pressed,
-            });
-        } else {
+        let state = encoder_state(&encoder_left, &encoder_right);
+        let transition = (last_state << 2) | state;
+        last_state = state;
+
+        let Some(delta) = encoder_transition_delta(transition) else {
+            position = 0;
+            continue;
+        };
+
+        position += delta;
+
+        if position >= ENCODER_STEPS_PER_DETENT {
+            position = 0;
             publisher.publish_immediate(KeyEvent {
                 key: Key::EncoderRight,
                 event: Event::Pressed,
             });
-        };
+        } else if position <= -ENCODER_STEPS_PER_DETENT {
+            position = 0;
+            publisher.publish_immediate(KeyEvent {
+                key: Key::EncoderLeft,
+                event: Event::Pressed,
+            });
+        }
+    }
+}
 
-        encoder_right.wait_for_rising_edge().await;
+fn encoder_state(encoder_left: &Input<'_>, encoder_right: &Input<'_>) -> u8 {
+    let left = match encoder_left.get_level() {
+        Level::Low => 0,
+        Level::High => 1,
+    };
+    let right = match encoder_right.get_level() {
+        Level::Low => 0,
+        Level::High => 1,
+    };
+
+    (left << 1) | right
+}
+
+fn encoder_transition_delta(transition: u8) -> Option<i8> {
+    match transition {
+        0b0001 | 0b0111 | 0b1110 | 0b1000 => Some(1),
+        0b0010 | 0b1011 | 0b1101 | 0b0100 => Some(-1),
+        0b0000 | 0b0101 | 0b1010 | 0b1111 => Some(0),
+        _ => None,
     }
 }
 
