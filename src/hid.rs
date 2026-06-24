@@ -73,9 +73,9 @@ const KEYLAYOUT: KeyLayout = KeyLayout {
             keycode: KeyboardUsage::KeyboardDownArrow,
         },
     },
-    key1: KeyType::Keycode(KeyboardUsage::KeyboardOo),
-    key2: KeyType::Keycode(KeyboardUsage::KeyboardSs),
-    key3: KeyType::Keycode(KeyboardUsage::KeyboardFf),
+    key1: KeyType::Keycode(KeyboardUsage::KeyboardF13),
+    key2: KeyType::Keycode(KeyboardUsage::KeyboardF14),
+    key3: KeyType::Keycode(KeyboardUsage::KeyboardF15),
 };
 
 #[embassy_executor::task]

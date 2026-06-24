@@ -1,6 +1,6 @@
 # Firmware Feature Design
 
-This document records the behavior implemented on top of the base OSKAR firmware. It focuses on the user-facing controls, HID signals, and implementation choices that make the controls reliable. General board and firmware setup information belongs in `README.md`.
+This document records the behavior implemented on top of the base OSKAR firmware. It focuses on the user-facing controls, HID signals, host-side tooling, and implementation choices that make the controls reliable. General board and original firmware setup information belongs in `README.md`.
 
 ## Control Map
 
@@ -9,9 +9,9 @@ This document records the behavior implemented on top of the base OSKAR firmware
 | Encoder clockwise | Implemented | Move forward through the operating system window switcher. |
 | Encoder counter-clockwise | Implemented | Move backward through the operating system window switcher. |
 | Encoder button | Implemented | Confirm the current window-switch selection when switching is active; otherwise toggle window maximize/minimize. |
-| Key1 | Planned | Reserved for future workflow behavior. |
-| Key2 | Planned | Reserved for future workflow behavior. |
-| Key3 | Planned | Reserved for future workflow behavior. |
+| Key1 | Implemented | Sends F13. Host-side daemon maps it to key1 config. |
+| Key2 | Implemented | Sends F14. Host-side daemon maps it to key2 config. |
+| Key3 | Implemented | Sends F15. Host-side daemon maps it to key3 config. |
 
 ## HID Action Model
 
@@ -77,23 +77,57 @@ The firmware emits one encoder event only after `ENCODER_STEPS_PER_DETENT` (`4`)
 
 Encoder and button events are sent through `KEY_EVENT_QUEUE`. The queue depth is `8`, which gives short bursts of fast encoder motion enough room before the HID task consumes them. This is intentionally larger than the original tiny queue because losing intermediate encoder events can make the window switcher feel inconsistent.
 
-## Future Key Workflows
+## Macro Keys
 
-`Key1`, `Key2`, and `Key3` still use placeholder keyboard mappings. Future work should add their behavior as separate sections under this heading instead of folding them into the encoder section.
+`Key1`, `Key2`, and `Key3` use high function-key HID mappings:
 
-Suggested structure for each key:
+- Key1: `KeyboardF13`
+- Key2: `KeyboardF14`
+- Key3: `KeyboardF15`
 
-```text
-### Key1
+This is a short-term standard-key workaround. Future work should replace these keys with a custom HID path so desktop shortcuts cannot collide with OSKAR macro triggers.
 
-- User workflow:
-- HID signals:
-- Interaction with active encoder/window-switch state:
-- Timing or debounce considerations:
-```
+The firmware only emits the HID keys. It does not store user macros or paste text itself. User-specific behavior lives on the host machine.
 
-When adding new key behavior, keep these rules in mind:
+## Host-Side Tooling
 
-- If a key can be pressed during an active window-switch session, decide whether it should commit the session first, cancel it, or be ignored until the session ends.
-- Prefer `Combo` or `Toggle` mappings for OS-level shortcuts so the layout remains readable.
-- Release modifiers explicitly after any synthetic chord unless the behavior intentionally holds a modifier for a stateful interaction.
+The host-side interface lives in `host-tools/`.
+
+The first supported target runtimes are:
+
+- Linux: `host-tools/linux/oskar-host.py`, using the system Python 3, Tk GUI, and desktop helper commands. `host-tools/linux/START.sh` opens the user-facing GUI.
+- Windows: `host-tools/windows/oskar-host.ps1`, using built-in Windows PowerShell plus a small C# keyboard hook source file loaded only by the daemon. `host-tools/windows/START.cmd` opens the user-facing GUI.
+
+### Host Config
+
+The daemon config is independent for each key:
+
+- `key1_text`: text pasted when F13 is received.
+- `key2_text`: text pasted when F14 is received.
+- `key3_text`: text pasted when F15 is received.
+
+Config locations:
+
+- Linux: `~/.config/oskar/config.txt`, unless `OSKAR_CONFIG` is set.
+- Windows: `%APPDATA%\OSKAR\config.txt`, unless `OSKAR_CONFIG` is set.
+
+The daemon reloads config on every key press, so changing config does not require restarting the daemon.
+
+### First-Pass Host Actions
+
+The first implemented action is paste-text for all three keys.
+
+- Key1/F13 pastes `key1_text`.
+- Key2/F14 pastes `key2_text`.
+- Key3/F15 pastes `key3_text`.
+
+Future work can replace the paste action with richer per-key workflows while keeping the same trigger/config separation.
+
+### Registration Model
+
+The daemon is expected to run continuously in the background.
+
+- Linux target machines can register it as a `systemd --user` service from the Linux GUI or with `host-tools/linux/oskar-host.py install-startup`.
+- Windows target machines can register it at logon for the current user using `host-tools/windows/oskar-host.ps1 install-startup`.
+
+Detailed step-by-step build, copy, registration, and config instructions are in `host-tools/README.md`.
