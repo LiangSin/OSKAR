@@ -16,6 +16,8 @@ $ErrorActionPreference = "Stop"
 
 $StartupName = "OSKAR Host Daemon"
 $RunKeyPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+$HostKeyDebounceMs = 150
+$LastHostKeyPress = @{}
 
 function Get-ScriptDir {
     return Split-Path -Parent $PSCommandPath
@@ -202,6 +204,19 @@ function Paste-Text([string]$Value) {
     [System.Windows.Forms.SendKeys]::SendWait("^v")
 }
 
+function Should-HandleHostKey([string]$Key) {
+    $now = [DateTime]::UtcNow
+    if ($LastHostKeyPress.ContainsKey($Key)) {
+        $elapsed = ($now - $LastHostKeyPress[$Key]).TotalMilliseconds
+        if ($elapsed -lt $HostKeyDebounceMs) {
+            return $false
+        }
+    }
+
+    $LastHostKeyPress[$Key] = $now
+    return $true
+}
+
 function Get-HookSourcePath {
     return Join-Path (Get-ScriptDir) "oskar-keyboard-hook.cs"
 }
@@ -237,14 +252,17 @@ function Start-Daemon {
             $config = Read-Config
             switch ($vkCode) {
                 0x7C {
+                    if (-not (Should-HandleHostKey "key1")) { return }
                     Write-Log "F13 pressed"
                     Paste-Text ($config["key1_text"])
                 }
                 0x7D {
+                    if (-not (Should-HandleHostKey "key2")) { return }
                     Write-Log "F14 pressed"
                     Paste-Text ($config["key2_text"])
                 }
                 0x7E {
+                    if (-not (Should-HandleHostKey "key3")) { return }
                     Write-Log "F15 pressed"
                     Paste-Text ($config["key3_text"])
                 }

@@ -15,6 +15,7 @@ KEY_F13 = 183
 KEY_F14 = 184
 KEY_F15 = 185
 KEY_PRESS = 1
+HOST_KEY_DEBOUNCE_SECONDS = 0.15
 INPUT_EVENT_STRUCT = "llHHI"
 INPUT_EVENT_SIZE = struct.calcsize(INPUT_EVENT_STRUCT)
 
@@ -665,8 +666,14 @@ def command_daemon(args):
     print("oskar-host linux daemon started", flush=True)
     print(f"config: {config_path()}", flush=True)
     events = stdin_events() if args.stdin else evdev_events()
+    last_button_time = {}
     try:
         for button in events:
+            now = time.monotonic()
+            if now - last_button_time.get(button, 0) < HOST_KEY_DEBOUNCE_SECONDS:
+                continue
+            last_button_time[button] = now
+
             config = load_config()
             write_log(f"{button} pressed")
             try:

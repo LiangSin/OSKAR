@@ -53,6 +53,7 @@ const MOD_LEFT_ALT: u8 = 0x04;
 const MOD_LEFT_GUI: u8 = 0x08;
 const WINDOW_SWITCH_TIMEOUT: Duration = Duration::from_secs(1);
 const ENCODER_STEPS_PER_DETENT: i8 = 4;
+const BUTTON_DEBOUNCE: Duration = Duration::from_millis(20);
 
 const KEYLAYOUT: KeyLayout = KeyLayout {
     encoder_left: KeyType::Combo(KeyCombo {
@@ -264,6 +265,10 @@ pub async fn button_task(r: ButtonResources) -> ! {
     encoder_button.set_schmitt(true);
 
     let publisher = KEY_EVENT_QUEUE.publisher().unwrap();
+    let mut key1_pressed = key1.get_level() == Level::Low;
+    let mut key2_pressed = key2.get_level() == Level::Low;
+    let mut key3_pressed = key3.get_level() == Level::Low;
+    let mut encoder_button_pressed = encoder_button.get_level() == Level::Low;
 
     loop {
         let (_, index) = select_array([
@@ -274,47 +279,65 @@ pub async fn button_task(r: ButtonResources) -> ! {
         ])
         .await;
 
+        Timer::after(BUTTON_DEBOUNCE).await;
+
         match index {
-            0 => match key1.get_level() {
-                Level::Low => publisher.publish_immediate(KeyEvent {
-                    key: Key::Key1,
-                    event: Event::Pressed,
-                }),
-                Level::High => publisher.publish_immediate(KeyEvent {
-                    key: Key::Key1,
-                    event: Event::Released,
-                }),
-            },
-            1 => match key2.get_level() {
-                Level::Low => publisher.publish_immediate(KeyEvent {
-                    key: Key::Key2,
-                    event: Event::Pressed,
-                }),
-                Level::High => publisher.publish_immediate(KeyEvent {
-                    key: Key::Key2,
-                    event: Event::Released,
-                }),
-            },
-            2 => match key3.get_level() {
-                Level::Low => publisher.publish_immediate(KeyEvent {
-                    key: Key::Key3,
-                    event: Event::Pressed,
-                }),
-                Level::High => publisher.publish_immediate(KeyEvent {
-                    key: Key::Key3,
-                    event: Event::Released,
-                }),
-            },
-            3 => match encoder_button.get_level() {
-                Level::Low => publisher.publish_immediate(KeyEvent {
-                    key: Key::EncoderButton,
-                    event: Event::Pressed,
-                }),
-                Level::High => publisher.publish_immediate(KeyEvent {
-                    key: Key::EncoderButton,
-                    event: Event::Released,
-                }),
-            },
+            0 => {
+                let pressed = key1.get_level() == Level::Low;
+                if pressed != key1_pressed {
+                    key1_pressed = pressed;
+                    publisher.publish_immediate(KeyEvent {
+                        key: Key::Key1,
+                        event: if pressed {
+                            Event::Pressed
+                        } else {
+                            Event::Released
+                        },
+                    });
+                }
+            }
+            1 => {
+                let pressed = key2.get_level() == Level::Low;
+                if pressed != key2_pressed {
+                    key2_pressed = pressed;
+                    publisher.publish_immediate(KeyEvent {
+                        key: Key::Key2,
+                        event: if pressed {
+                            Event::Pressed
+                        } else {
+                            Event::Released
+                        },
+                    });
+                }
+            }
+            2 => {
+                let pressed = key3.get_level() == Level::Low;
+                if pressed != key3_pressed {
+                    key3_pressed = pressed;
+                    publisher.publish_immediate(KeyEvent {
+                        key: Key::Key3,
+                        event: if pressed {
+                            Event::Pressed
+                        } else {
+                            Event::Released
+                        },
+                    });
+                }
+            }
+            3 => {
+                let pressed = encoder_button.get_level() == Level::Low;
+                if pressed != encoder_button_pressed {
+                    encoder_button_pressed = pressed;
+                    publisher.publish_immediate(KeyEvent {
+                        key: Key::EncoderButton,
+                        event: if pressed {
+                            Event::Pressed
+                        } else {
+                            Event::Released
+                        },
+                    });
+                }
+            }
             _ => unreachable!(),
         };
     }
