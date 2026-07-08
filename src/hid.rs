@@ -113,6 +113,10 @@ pub async fn hid_task(
             sub.next_message_pure().await
         };
 
+        if window_switch_active && key_event.cancels_window_switch() {
+            window_switch_active = false;
+        }
+
         match key_event.key {
             Key::EncoderLeft => {
                 keyboard_class =
@@ -125,27 +129,17 @@ pub async fn hid_task(
                 window_switch_active = true;
             }
             Key::EncoderButton => {
-                if window_switch_active && key_event.event == Event::Pressed {
-                    keyboard_class = release_keyboard(keyboard_class).await;
-                    window_switch_active = false;
-                } else if !window_switch_active {
-                    (keyboard_class, multimedia_class, encoder_button_toggle) =
-                        handle_toggle_interaction(
-                            keyboard_class,
-                            multimedia_class,
-                            KEYLAYOUT.encoder_button,
-                            key_event.event,
-                            encoder_button_toggle,
-                        )
-                        .await;
-                }
+                (keyboard_class, multimedia_class, encoder_button_toggle) =
+                    handle_toggle_interaction(
+                        keyboard_class,
+                        multimedia_class,
+                        KEYLAYOUT.encoder_button,
+                        key_event.event,
+                        encoder_button_toggle,
+                    )
+                    .await;
             }
             Key::Key1 => {
-                if window_switch_active {
-                    keyboard_class = release_keyboard(keyboard_class).await;
-                    window_switch_active = false;
-                }
-
                 (keyboard_class, multimedia_class) = send_code(
                     keyboard_class,
                     multimedia_class,
@@ -155,11 +149,6 @@ pub async fn hid_task(
                 .await;
             }
             Key::Key2 => {
-                if window_switch_active {
-                    keyboard_class = release_keyboard(keyboard_class).await;
-                    window_switch_active = false;
-                }
-
                 (keyboard_class, multimedia_class) = send_code(
                     keyboard_class,
                     multimedia_class,
@@ -169,11 +158,6 @@ pub async fn hid_task(
                 .await;
             }
             Key::Key3 => {
-                if window_switch_active {
-                    keyboard_class = release_keyboard(keyboard_class).await;
-                    window_switch_active = false;
-                }
-
                 (keyboard_class, multimedia_class) = send_code(
                     keyboard_class,
                     multimedia_class,
@@ -183,6 +167,12 @@ pub async fn hid_task(
                 .await;
             }
         }
+    }
+}
+
+impl KeyEvent {
+    fn cancels_window_switch(&self) -> bool {
+        !matches!(self.key, Key::EncoderLeft | Key::EncoderRight)
     }
 }
 

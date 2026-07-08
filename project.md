@@ -8,7 +8,7 @@ This document records the behavior implemented on top of the base OSKAR firmware
 | --- | --- | --- |
 | Encoder clockwise | Implemented | Move forward through the operating system window switcher. |
 | Encoder counter-clockwise | Implemented | Move backward through the operating system window switcher. |
-| Encoder button | Implemented | Confirm the current window-switch selection when switching is active; otherwise toggle window maximize/minimize. |
+| Encoder button | Implemented | Toggle window maximize/minimize. |
 | Key1 | Implemented | Sends F13. Host-side daemon maps it to key1 config. |
 | Key2 | Implemented | Sends F14. Host-side daemon maps it to key2 config. |
 | Key3 | Implemented | Sends F15. Host-side daemon maps it to key3 config. |
@@ -51,14 +51,13 @@ While `LeftAlt` remains held, the operating system window switcher stays open an
 
 ### Selection Commit
 
-The switch session is committed in two ways:
+The switch session is committed by timeout:
 
 - If no encoder event arrives for `WINDOW_SWITCH_TIMEOUT` (`1s`), the firmware sends an empty `KeyboardReport`, releasing all keyboard modifiers and selecting the highlighted window.
-- If the encoder button is pressed while a switch session is active, the firmware immediately sends the same empty keyboard report and commits the highlighted window.
 
-When no switch session is active, the encoder button keeps its normal behavior: it alternates between `LeftGUI + UpArrow` and `LeftGUI + DownArrow`, matching the common Linux and Windows maximize/restore-minimize window shortcuts.
+The encoder button is not overloaded as a switch-session confirm control. It always alternates between `LeftGUI + UpArrow` and `LeftGUI + DownArrow`, matching the common Linux and Windows maximize/restore-minimize window shortcuts.
 
-If `Key1`, `Key2`, or `Key3` is pressed while a switch session is active, the firmware first releases the keyboard report to commit the selected window, then handles the key event. This prevents accidental `Alt+<key>` combinations.
+If `Key1`, `Key2`, `Key3`, or the encoder button is pressed while a switch session is active, that non-rotation event ends the internal switch-session state before its normal HID action is handled. The next encoder rotation starts a fresh held-Alt switch session.
 
 ### Encoder Decoding
 
