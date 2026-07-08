@@ -20,7 +20,7 @@ use embassy_rp::spi::{Config as SpiConfig, Spi};
 use embassy_rp::usb::{Driver, InterruptHandler as USBInterruptHandler};
 use embassy_rp::watchdog::Watchdog;
 use embassy_usb::class::cdc_acm::{CdcAcmClass, State as CdcAcmState};
-use embassy_usb::class::hid::{HidReaderWriter, State as Hid_State};
+use embassy_usb::class::hid::{HidReaderWriter, HidWriter, State as Hid_State};
 use usbd_hid::descriptor::{KeyboardReport, MediaKeyboardReport, SerializedDescriptor};
 
 use embassy_usb::{Config as UsbConfig, UsbDevice};
@@ -88,8 +88,6 @@ pub enum DeviceMode {
 // According to Serial Flasher Protocol Specification - version 1
 const FLASH_SIZE: usize = 2 * 1024 * 1024;
 
-
-
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     let p: embassy_rp::Peripherals = embassy_rp::init(Default::default());
@@ -139,15 +137,15 @@ async fn main(spawner: Spawner) {
     };
 
     let mut builder: embassy_usb::Builder<'_, Driver<'_, USB>> = {
-        static CONFIG_DESCRIPTOR: StaticCell<[u8; 256]> = StaticCell::new();
+        static CONFIG_DESCRIPTOR: StaticCell<[u8; 512]> = StaticCell::new();
         static BOS_DESCRIPTOR: StaticCell<[u8; 256]> = StaticCell::new();
         static CONTROL_BUF: StaticCell<[u8; 64]> = StaticCell::new();
-        static MSOS_DESCRIPTOR: StaticCell <[u8; 256]> = StaticCell::new();
+        static MSOS_DESCRIPTOR: StaticCell<[u8; 256]> = StaticCell::new();
 
         let builder = embassy_usb::Builder::new(
             driver,
             config,
-            CONFIG_DESCRIPTOR.init([0; 256]),
+            CONFIG_DESCRIPTOR.init([0; 512]),
             BOS_DESCRIPTOR.init([0; 256]),
             MSOS_DESCRIPTOR.init([0; 256]), // no msos descriptors
             CONTROL_BUF.init([0; 64]),
@@ -203,7 +201,30 @@ async fn main(spawner: Spawner) {
             HidReaderWriter::new(&mut builder, state, config)
         };
 
-        spawner.spawn(hid::hid_task(spawner, keyboard_class, multimedia_class, r.hid, r.encoder)).unwrap();
+        let oskar_class: HidWriter<'_, Driver<'_, USB>, 8> = {
+            static STATE: StaticCell<Hid_State> = StaticCell::new();
+            let state = STATE.init(Hid_State::new());
+
+            let config = embassy_usb::class::hid::Config {
+                report_descriptor: hid::OSKAR_CUSTOM_HID_REPORT_DESCRIPTOR,
+                request_handler: None,
+                poll_ms: 10,
+                max_packet_size: 64,
+            };
+
+            HidWriter::new(&mut builder, state, config)
+        };
+
+        spawner
+            .spawn(hid::hid_task(
+                spawner,
+                keyboard_class,
+                multimedia_class,
+                oskar_class,
+                r.hid,
+                r.encoder,
+            ))
+            .unwrap();
     }
 
     let usb = builder.build();

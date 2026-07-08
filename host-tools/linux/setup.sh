@@ -2,7 +2,8 @@
 set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-GUI="$SCRIPT_DIR/oskar-host-gui.sh"
+GUI="$SCRIPT_DIR/START.sh"
+UDEV_RULE_PATH="/etc/udev/rules.d/70-oskar-custom-hid.rules"
 
 say() {
     printf '%s\n' "$*"
@@ -44,9 +45,21 @@ ensure_input_group() {
         return 0
     fi
 
-    say "Adding $USER to the input group so the daemon can read /dev/input/event*."
+    say "Adding $USER to the input group so the daemon can read /dev/hidraw*."
     sudo usermod -aG input "$USER"
     return 1
+}
+
+install_udev_rule() {
+    say "Installing udev rule for OSKAR custom HID access."
+    printf '%s\n' \
+        'SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1ced", ATTRS{idProduct}=="c0fe", MODE="0660", GROUP="input", TAG+="uaccess"' |
+        sudo tee "$UDEV_RULE_PATH" >/dev/null
+
+    if have udevadm; then
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger --subsystem-match=hidraw || true
+    fi
 }
 
 main() {
@@ -82,6 +95,7 @@ main() {
     esac
 
     install_apt_packages $packages
+    install_udev_rule
 
     relogin_needed=0
     if ! ensure_input_group; then

@@ -9,16 +9,17 @@ This document records the behavior implemented on top of the base OSKAR firmware
 | Encoder clockwise | Implemented | Move forward through the operating system window switcher. |
 | Encoder counter-clockwise | Implemented | Move backward through the operating system window switcher. |
 | Encoder button | Implemented | Toggle window maximize/minimize. |
-| Key1 | Implemented | Sends F13. Host-side daemon maps it to key1 config. |
-| Key2 | Implemented | Sends F14. Host-side daemon maps it to key2 config. |
-| Key3 | Implemented | Sends F15. Host-side daemon maps it to key3 config. |
+| Key1 | Implemented | Sends OSKAR custom HID button `1`. Host-side daemon maps it to key1 config. |
+| Key2 | Implemented | Sends OSKAR custom HID button `2`. Host-side daemon maps it to key2 config. |
+| Key3 | Implemented | Sends OSKAR custom HID button `3`. Host-side daemon maps it to key3 config. |
 
 ## HID Action Model
 
-The firmware exposes two HID paths:
+The firmware exposes three HID paths:
 
 - `KeyboardReport` for regular keyboard usage codes and modifier combinations.
 - `MediaKeyboardReport` for consumer/media keys, kept available for future mappings even though the current encoder workflow only uses keyboard reports.
+- A vendor-defined OSKAR custom HID interface for the three macro keys.
 
 The layout layer uses these action types:
 
@@ -28,6 +29,8 @@ The layout layer uses these action types:
 - `Media`: a consumer/media usage code.
 
 `KeyCombo` stores a modifier byte and one `KeyboardUsage`, which keeps future mappings compact and avoids duplicating low-level report construction in layout definitions.
+
+The three macro keys are represented as `OskarButton` values in the layout because they are routed to the custom HID interface rather than the standard keyboard/media action path.
 
 ## Encoder Controls
 
@@ -78,15 +81,17 @@ Encoder and button events are sent through `KEY_EVENT_QUEUE`. The queue depth is
 
 ## Macro Keys
 
-`Key1`, `Key2`, and `Key3` use high function-key HID mappings:
+`Key1`, `Key2`, and `Key3` use a vendor-defined HID path instead of standard keyboard usage codes. This avoids collisions with operating-system shortcuts that can claim high function keys such as F13-F15.
 
-- Key1: `KeyboardF13`
-- Key2: `KeyboardF14`
-- Key3: `KeyboardF15`
+The custom interface uses:
 
-This is a short-term standard-key workaround. Future work should replace these keys with a custom HID path so desktop shortcuts cannot collide with OSKAR macro triggers.
+- Usage page: `0xFF00` (vendor defined).
+- Usage: `0x01`.
+- Input report size: 2 bytes.
+- Byte 0: button id (`1`, `2`, or `3`).
+- Byte 1: pressed state (`1` for press, `0` for release).
 
-The firmware only emits the HID keys. It does not store user macros or paste text itself. User-specific behavior lives on the host machine.
+The firmware only emits custom HID button reports. It does not store user macros or paste text itself. User-specific behavior lives on the host machine.
 
 ## Host-Side Tooling
 
@@ -94,16 +99,16 @@ The host-side interface lives in `host-tools/`.
 
 The first supported target runtimes are:
 
-- Linux: `host-tools/linux/oskar-host.py`, using the system Python 3, Tk GUI, and desktop helper commands. `host-tools/linux/START.sh` opens the user-facing GUI.
-- Windows: `host-tools/windows/oskar-host.ps1`, using built-in Windows PowerShell plus a small C# keyboard hook source file loaded only by the daemon. `host-tools/windows/START.cmd` opens the user-facing GUI.
+- Linux: `host-tools/linux/oskar-host.py`, using the system Python 3, Tk GUI, `/dev/hidraw*`, and desktop helper commands. `host-tools/linux/START.sh` opens the user-facing GUI.
+- Windows: `host-tools/windows/oskar-host.ps1`, using built-in Windows PowerShell plus a small C# Raw Input HID source file loaded only by the daemon. `host-tools/windows/START.cmd` opens the user-facing GUI.
 
 ### Host Config
 
 The daemon config is independent for each key:
 
-- `key1_text`: text pasted when F13 is received.
-- `key2_text`: text pasted when F14 is received.
-- `key3_text`: text pasted when F15 is received.
+- `key1_text`: text pasted when custom HID button `1` is received.
+- `key2_text`: text pasted when custom HID button `2` is received.
+- `key3_text`: text pasted when custom HID button `3` is received.
 
 Config locations:
 
@@ -116,9 +121,9 @@ The daemon reloads config on every key press, so changing config does not requir
 
 The first implemented action is paste-text for all three keys.
 
-- Key1/F13 pastes `key1_text`.
-- Key2/F14 pastes `key2_text`.
-- Key3/F15 pastes `key3_text`.
+- Key1 pastes `key1_text`.
+- Key2 pastes `key2_text`.
+- Key3 pastes `key3_text`.
 
 Future work can replace the paste action with richer per-key workflows while keeping the same trigger/config separation.
 

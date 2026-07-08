@@ -12,3 +12,5 @@ build-std-features = ["panic_immediate_abort"]
 
 [env]
 DEFMT_LOG = "debug"
+EMBASSY_USB_MAX_HANDLER_COUNT = "7"
+EMBASSY_USB_MAX_INTERFACE_COUNT = "7"

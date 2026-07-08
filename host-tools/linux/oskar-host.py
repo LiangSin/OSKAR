@@ -5,19 +5,26 @@ import pathlib
 import select
 import signal
 import shutil
-import struct
 import subprocess
 import sys
 import time
 
-EV_KEY = 0x01
-KEY_F13 = 183
-KEY_F14 = 184
-KEY_F15 = 185
-KEY_PRESS = 1
 HOST_KEY_DEBOUNCE_SECONDS = 0.15
-INPUT_EVENT_STRUCT = "llHHI"
-INPUT_EVENT_SIZE = struct.calcsize(INPUT_EVENT_STRUCT)
+OSKAR_CUSTOM_HID_REPORT_DESCRIPTOR = bytes(
+    [
+        0x06, 0x00, 0xFF,
+        0x09, 0x01,
+        0xA1, 0x01,
+        0x09, 0x10,
+        0x15, 0x00,
+        0x26, 0xFF, 0x00,
+        0x75, 0x08,
+        0x95, 0x02,
+        0x81, 0x02,
+        0xC0,
+    ]
+)
+OSKAR_CUSTOM_HID_REPORT_SIZE = 2
 
 DEFAULTS = {
     "key1_text": "OSKAR key 1",
@@ -226,9 +233,9 @@ def save_config(config):
 
 def print_config(config):
     print(f"config: {config_path()}")
-    print(f"key1/F13 = {config['key1_text']!r}")
-    print(f"key2/F14 = {config['key2_text']!r}")
-    print(f"key3/F15 = {config['key3_text']!r}")
+    print(f"key1 = {config['key1_text']!r}")
+    print(f"key2 = {config['key2_text']!r}")
+    print(f"key3 = {config['key3_text']!r}")
 
 
 def prefer_wayland():
@@ -313,37 +320,54 @@ def stdin_events():
             print(f"ignored stdin event: {line.strip()}", file=sys.stderr)
 
 
-def evdev_events():
+def oskar_hidraw_paths():
+    for sys_path in sorted(pathlib.Path("/sys/class/hidraw").glob("hidraw*")):
+        descriptor_path = sys_path / "device" / "report_descriptor"
+        try:
+            descriptor = descriptor_path.read_bytes()
+        except OSError:
+            continue
+        if descriptor == OSKAR_CUSTOM_HID_REPORT_DESCRIPTOR:
+            yield pathlib.Path("/dev") / sys_path.name
+
+
+def hidraw_events():
     devices = []
-    for path in sorted(pathlib.Path("/dev/input").glob("event*")):
+    permission_denied = []
+    for path in oskar_hidraw_paths():
         try:
             devices.append(open(path, "rb", buffering=0))
         except PermissionError:
+            permission_denied.append(path)
             continue
         except OSError:
             continue
 
     if not devices:
+        if permission_denied:
+            raise RuntimeError(
+                "found the OSKAR custom HID interface but cannot read it; run setup.sh "
+                "or install a udev rule that grants this user access to /dev/hidraw*"
+            )
         raise RuntimeError(
-            "no readable /dev/input/event* devices; add this user to the input group "
-            "or install a udev rule"
+            "no OSKAR custom HID interface found; flash the custom-HID firmware and reconnect OSKAR"
         )
-
-    code_to_button = {
-        KEY_F13: "key1",
-        KEY_F14: "key2",
-        KEY_F15: "key3",
-    }
 
     while True:
         readable, _, _ = select.select(devices, [], [])
         for device in readable:
-            data = device.read(INPUT_EVENT_SIZE)
-            if len(data) != INPUT_EVENT_SIZE:
+            data = device.read(OSKAR_CUSTOM_HID_REPORT_SIZE)
+            if len(data) != OSKAR_CUSTOM_HID_REPORT_SIZE:
                 continue
-            _, _, event_type, code, value = struct.unpack(INPUT_EVENT_STRUCT, data)
-            if event_type == EV_KEY and value == KEY_PRESS and code in code_to_button:
-                yield code_to_button[code]
+            button_id, pressed = data
+            if pressed != 1:
+                continue
+            if button_id == 1:
+                yield "key1"
+            elif button_id == 2:
+                yield "key2"
+            elif button_id == 3:
+                yield "key3"
 
 
 def command_init_config(_args):
@@ -360,7 +384,7 @@ def command_set(args):
     config = load_config()
     button = parse_button(args.button)
     if not button:
-        raise RuntimeError("button must be key1, key2, key3, f13, f14, or f15")
+        raise RuntimeError("button must be key1, key2, or key3")
     config[button_to_config_key(button)] = args.text
     save_config(config)
     print_config(config)
@@ -382,9 +406,9 @@ def show_edit_config_dialog(parent, on_saved):
 
     fields = {}
     rows = [
-        ("Key 1 / F13", "key1_text"),
-        ("Key 2 / F14", "key2_text"),
-        ("Key 3 / F15", "key3_text"),
+        ("Key 1", "key1_text"),
+        ("Key 2", "key2_text"),
+        ("Key 3", "key3_text"),
     ]
     for index, (label_text, key) in enumerate(rows):
         ttk.Label(frame, text=label_text).grid(row=index, column=0, sticky="w", pady=6)
@@ -485,9 +509,9 @@ def command_ui(_args):
     def refresh_config():
         current = load_config()
         save_config(current)
-        key1_var.set(f"Key1 / F13: {current['key1_text']}")
-        key2_var.set(f"Key2 / F14: {current['key2_text']}")
-        key3_var.set(f"Key3 / F15: {current['key3_text']}")
+        key1_var.set(f"Key1: {current['key1_text']}")
+        key2_var.set(f"Key2: {current['key2_text']}")
+        key3_var.set(f"Key3: {current['key3_text']}")
 
     def refresh_status():
         status_text.configure(state="normal")
@@ -665,7 +689,7 @@ def command_daemon(args):
     save_config(load_config())
     print("oskar-host linux daemon started", flush=True)
     print(f"config: {config_path()}", flush=True)
-    events = stdin_events() if args.stdin else evdev_events()
+    events = stdin_events() if args.stdin else hidraw_events()
     last_button_time = {}
     try:
         for button in events:

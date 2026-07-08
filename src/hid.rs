@@ -12,11 +12,25 @@ use embassy_rp::usb::Driver;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::pubsub::PubSubChannel;
 use embassy_time::{Duration, Timer};
-use embassy_usb::class::hid::HidReaderWriter;
+use embassy_usb::class::hid::{HidReaderWriter, HidWriter};
 use usbd_hid::descriptor::*;
 type CustomHid = HidReaderWriter<'static, Driver<'static, USB>, 1, 8>;
+type CustomHidWriter = HidWriter<'static, Driver<'static, USB>, 8>;
 static KEY_EVENT_QUEUE: PubSubChannel<CriticalSectionRawMutex, KeyEvent, 8, 2, 2> =
     PubSubChannel::new();
+
+pub const OSKAR_CUSTOM_HID_REPORT_DESCRIPTOR: &[u8] = &[
+    0x06, 0x00, 0xff, // Usage Page (Vendor Defined 0xFF00)
+    0x09, 0x01, // Usage (OSKAR Macro Keys)
+    0xa1, 0x01, // Collection (Application)
+    0x09, 0x10, // Usage (Macro Key Report)
+    0x15, 0x00, // Logical Minimum (0)
+    0x26, 0xff, 0x00, // Logical Maximum (255)
+    0x75, 0x08, // Report Size (8)
+    0x95, 0x02, // Report Count (2)
+    0x81, 0x02, // Input (Data, Variable, Absolute)
+    0xc0, // End Collection
+];
 
 #[derive(Clone, PartialEq)]
 enum Key {
@@ -48,6 +62,13 @@ pub enum KeyType {
     Toggle { first: KeyCombo, second: KeyCombo },
 }
 
+#[derive(Clone, Copy)]
+pub enum OskarButton {
+    Key1 = 1,
+    Key2 = 2,
+    Key3 = 3,
+}
+
 const MOD_LEFT_SHIFT: u8 = 0x02;
 const MOD_LEFT_ALT: u8 = 0x04;
 const MOD_LEFT_GUI: u8 = 0x08;
@@ -74,9 +95,9 @@ const KEYLAYOUT: KeyLayout = KeyLayout {
             keycode: KeyboardUsage::KeyboardDownArrow,
         },
     },
-    key1: KeyType::Keycode(KeyboardUsage::KeyboardF13),
-    key2: KeyType::Keycode(KeyboardUsage::KeyboardF14),
-    key3: KeyType::Keycode(KeyboardUsage::KeyboardF15),
+    key1: OskarButton::Key1,
+    key2: OskarButton::Key2,
+    key3: OskarButton::Key3,
 };
 
 #[embassy_executor::task]
@@ -84,6 +105,7 @@ pub async fn hid_task(
     spawner: Spawner,
     mut keyboard_class: CustomHid,
     mut multimedia_class: CustomHid,
+    mut oskar_class: CustomHidWriter,
     button_resources: ButtonResources,
     encoder_resources: EncoderResources,
 ) -> ! {
@@ -141,31 +163,13 @@ pub async fn hid_task(
                     .await;
             }
             Key::Key1 => {
-                (keyboard_class, multimedia_class) = send_code(
-                    keyboard_class,
-                    multimedia_class,
-                    KEYLAYOUT.key1,
-                    key_event.event,
-                )
-                .await;
+                oskar_class = send_oskar_button(oskar_class, KEYLAYOUT.key1, key_event.event).await;
             }
             Key::Key2 => {
-                (keyboard_class, multimedia_class) = send_code(
-                    keyboard_class,
-                    multimedia_class,
-                    KEYLAYOUT.key2,
-                    key_event.event,
-                )
-                .await;
+                oskar_class = send_oskar_button(oskar_class, KEYLAYOUT.key2, key_event.event).await;
             }
             Key::Key3 => {
-                (keyboard_class, multimedia_class) = send_code(
-                    keyboard_class,
-                    multimedia_class,
-                    KEYLAYOUT.key3,
-                    key_event.event,
-                )
-                .await;
+                oskar_class = send_oskar_button(oskar_class, KEYLAYOUT.key3, key_event.event).await;
             }
         }
     }
@@ -495,4 +499,24 @@ async fn send_code(
     };
 
     (keyboard_class, media_class)
+}
+
+async fn send_oskar_button(
+    mut oskar_class: CustomHidWriter,
+    button: OskarButton,
+    event: Event,
+) -> CustomHidWriter {
+    let report = [
+        button as u8,
+        match event {
+            Event::Pressed => 1,
+            Event::Released => 0,
+        },
+    ];
+
+    if let Err(e) = oskar_class.write(&report).await {
+        log::error!("Failed to send OSKAR custom HID report: {:?}", e);
+    }
+
+    oskar_class
 }

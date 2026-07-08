@@ -179,9 +179,9 @@ function Save-Config($Config) {
 
 function Show-Config($Config) {
     Write-Host "config: $(Get-ConfigPath)"
-    Write-Host "key1/F13 = $($Config["key1_text"])"
-    Write-Host "key2/F14 = $($Config["key2_text"])"
-    Write-Host "key3/F15 = $($Config["key3_text"])"
+    Write-Host "key1 = $($Config["key1_text"])"
+    Write-Host "key2 = $($Config["key2_text"])"
+    Write-Host "key3 = $($Config["key3_text"])"
 }
 
 function Resolve-Button([string]$Value) {
@@ -189,7 +189,7 @@ function Resolve-Button([string]$Value) {
         { $_ -in @("1", "key1", "f13") } { return "key1_text" }
         { $_ -in @("2", "key2", "f14") } { return "key2_text" }
         { $_ -in @("3", "key3", "f15") } { return "key3_text" }
-        default { throw "button must be key1, key2, key3, f13, f14, or f15" }
+        default { throw "button must be key1, key2, or key3" }
     }
 }
 
@@ -217,7 +217,7 @@ function Should-HandleHostKey([string]$Key) {
     return $true
 }
 
-function Get-HookSourcePath {
+function Get-RawInputSourcePath {
     return Join-Path (Get-ScriptDir) "oskar-keyboard-hook.cs"
 }
 
@@ -239,31 +239,31 @@ function Start-Daemon {
     Write-Host "config: $(Get-ConfigPath)"
     Write-Host "log: $(Get-LogPath)"
 
-    $hookSource = Get-HookSourcePath
-    if (-not (Test-Path -LiteralPath $hookSource)) {
-        throw "missing keyboard hook source: $hookSource"
+    $rawInputSource = Get-RawInputSourcePath
+    if (-not (Test-Path -LiteralPath $rawInputSource)) {
+        throw "missing Raw Input HID source: $rawInputSource"
     }
 
-    Add-Type -Path $hookSource -ReferencedAssemblies System.Windows.Forms
+    Add-Type -Path $rawInputSource -ReferencedAssemblies System.Windows.Forms
 
     $callback = [System.Action[int]]{
-        param([int]$vkCode)
+        param([int]$buttonId)
         try {
             $config = Read-Config
-            switch ($vkCode) {
-                0x7C {
+            switch ($buttonId) {
+                1 {
                     if (-not (Should-HandleHostKey "key1")) { return }
-                    Write-Log "F13 pressed"
+                    Write-Log "key1 pressed"
                     Paste-Text ($config["key1_text"])
                 }
-                0x7D {
+                2 {
                     if (-not (Should-HandleHostKey "key2")) { return }
-                    Write-Log "F14 pressed"
+                    Write-Log "key2 pressed"
                     Paste-Text ($config["key2_text"])
                 }
-                0x7E {
+                3 {
                     if (-not (Should-HandleHostKey "key3")) { return }
-                    Write-Log "F15 pressed"
+                    Write-Log "key3 pressed"
                     Paste-Text ($config["key3_text"])
                 }
             }
@@ -302,7 +302,7 @@ function Show-EditConfigDialog($Owner) {
     $dialog.MinimizeBox = $false
     $dialog.ClientSize = New-Object System.Drawing.Size(420, 210)
 
-    $labels = @("Key 1 / F13", "Key 2 / F14", "Key 3 / F15")
+    $labels = @("Key 1", "Key 2", "Key 3")
     $keys = @("key1_text", "key2_text", "key3_text")
     $boxes = @{}
 
@@ -466,9 +466,9 @@ function Start-Ui {
     $refreshConfig = {
         $current = Read-Config
         Save-Config $current
-        $key1Label.Text = "Key1 / F13: $($current["key1_text"])"
-        $key2Label.Text = "Key2 / F14: $($current["key2_text"])"
-        $key3Label.Text = "Key3 / F15: $($current["key3_text"])"
+        $key1Label.Text = "Key1: $($current["key1_text"])"
+        $key2Label.Text = "Key2: $($current["key2_text"])"
+        $key3Label.Text = "Key3: $($current["key3_text"])"
     }
 
     $refreshStatus = {
@@ -615,7 +615,7 @@ function Install-Startup {
             -Trigger $trigger `
             -Principal $principal `
             -Settings $settings `
-            -Description "OSKAR F13/F14/F15 host daemon" `
+            -Description "OSKAR custom HID host daemon" `
             -Force | Out-Null
         if (Get-ItemProperty -Path $RunKeyPath -Name $StartupName -ErrorAction SilentlyContinue) {
             Remove-ItemProperty -Path $RunKeyPath -Name $StartupName

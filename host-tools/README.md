@@ -1,16 +1,14 @@
 # OSKAR Host Tools
 
-This directory contains the user-side control interface for the new OSKAR macro-key behavior.
+This directory contains the user-side control interface for the OSKAR macro-key behavior.
 
-The firmware sends these HID keys:
+The firmware sends the three macro keys through a vendor-defined custom HID interface:
 
-- Key1 sends `F13`
-- Key2 sends `F14`
-- Key3 sends `F15`
+- Key1 sends custom HID button `1`
+- Key2 sends custom HID button `2`
+- Key3 sends custom HID button `3`
 
-This is the current short-term standard-key workaround. A future custom HID path should replace these keys to avoid desktop shortcut collisions entirely.
-
-The host daemon watches those keys and pastes configured text. The three keys are independent: each key has its own config value.
+The host daemon watches the custom HID reports and pastes configured text. The three keys are independent: each key has its own config value. Because the macro keys are no longer standard keyboard keys, they should not collide with operating-system shortcuts.
 
 - Linux target machine: use `host-tools/linux/` with the system Python 3.
 - Windows target machine: use `host-tools/windows/` with built-in Windows PowerShell.
@@ -30,7 +28,7 @@ Expected result:
 target/thumbv6m-none-eabi/release/oskar.uf2
 ```
 
-This firmware is what changes the physical OSKAR keys to send `F13`, `F14`, and `F15`.
+This firmware is what changes the physical OSKAR macro keys to send custom HID button reports.
 
 ## Step 2: Flash The Firmware
 
@@ -74,15 +72,15 @@ cd /path/to/host-tools/linux
 sh setup.sh
 ```
 
-The setup script installs dependencies with `apt`, and add the user to the `input` group so the daemon can read `/dev/input/event*`.
+The setup script installs dependencies with `apt`, installs a udev rule for the OSKAR custom HID interface, and adds the user to the `input` group so the daemon can read `/dev/hidraw*`.
 If setup adds you to the `input` group, log out and log back before starting the daemon. The group `input` should appear in the group list when running `id`.
 Run `newgrp input` as a temporary solution if needed.
 
-Open `oskar-host-gui.sh` from your file manager, or run it from a terminal:
+Open `START.sh` from your file manager, or run it from a terminal:
 
 ```sh
 cd /path/to/host-tools/linux
-./oskar-host-gui.sh
+./START.sh
 ```
 
 The GUI opens with the current config at the top. If the config file does not exist, the GUI creates it automatically.
@@ -98,7 +96,7 @@ Optional command-line diagnostics are still available:
 ```sh
 python3 oskar-host.py daemon-status
 python3 oskar-host.py show-log
-printf 'f13\nf14\nf15\n' | python3 oskar-host.py daemon --stdin --dry-run
+printf 'key1\nkey2\nkey3\n' | python3 oskar-host.py daemon --stdin --dry-run
 ```
 
 The Linux config file is normally here:
@@ -122,7 +120,7 @@ Unblock-File .\oskar-host.ps1
 Unblock-File .\oskar-keyboard-hook.cs
 ```
 
-Double-click `oskar-host-gui.cmd` from File Explorer, or open it from PowerShell:
+Double-click `START.cmd` from File Explorer, or open it from PowerShell:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\oskar-host.ps1 ui
@@ -157,7 +155,7 @@ Linux target machine:
 
 ```sh
 cd /path/to/host-tools/linux
-./oskar-host-gui.sh
+./START.sh
 ```
 
 Windows target machine:
@@ -166,13 +164,13 @@ Windows target machine:
 powershell -ExecutionPolicy Bypass -File .\oskar-host.ps1 ui
 ```
 
-Or double-click `oskar-host-gui.cmd`.
+Or double-click `START.cmd`.
 
 The daemon reloads the config every time a key is pressed, so changing config does not require restarting the daemon.
 
 ## Current Limitations
 
-- Linux support currently reads `/dev/input/event*`. This requires permission to read input devices.
+- Linux support reads the OSKAR `/dev/hidraw*` interface. This requires the setup udev rule or equivalent local device permissions.
 - Linux paste support depends on desktop helper commands because shell/Python alone cannot portably paste into arbitrary GUI applications.
-- Windows support uses PowerShell plus a small C# keyboard hook source file. It should not require installing anything extra on a normal Windows desktop.
+- Windows support uses PowerShell plus a small C# Raw Input HID source file. It should not require installing anything extra on a normal Windows desktop.
 - macOS is not implemented in this first pass.
