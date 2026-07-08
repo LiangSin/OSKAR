@@ -98,8 +98,13 @@ public class OskarKeyboardHook {
 
                 for (int index = 0; index < hidCount; index++) {
                     int reportOffset = dataOffset + (index * hidSize);
-                    int buttonId = Marshal.ReadByte(buffer, reportOffset);
-                    int pressed = Marshal.ReadByte(buffer, reportOffset + 1);
+                    int payloadOffset = reportOffset;
+                    if (hidSize >= 3 && Marshal.ReadByte(buffer, reportOffset) == 0) {
+                        payloadOffset = reportOffset + 1;
+                    }
+
+                    int buttonId = Marshal.ReadByte(buffer, payloadOffset);
+                    int pressed = Marshal.ReadByte(buffer, payloadOffset + 1);
                     if (pressed == 1 && buttonId >= 1 && buttonId <= 3) {
                         DispatchButton(buttonId);
                     }

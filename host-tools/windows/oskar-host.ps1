@@ -274,6 +274,7 @@ function Start-Daemon {
     }
 
     try {
+        Write-Log "waiting for OSKAR custom HID reports"
         [OskarKeyboardHook]::Run($callback)
     } catch {
         Write-Log "daemon failed: $($_.Exception.Message)"
