@@ -9,9 +9,9 @@ This document records the behavior implemented on top of the base OSKAR firmware
 | Encoder clockwise | Implemented | Move forward through the operating system window switcher. |
 | Encoder counter-clockwise | Implemented | Move backward through the operating system window switcher. |
 | Encoder button | Implemented | Toggle window maximize/minimize. |
-| Key1 | Implemented | Sends OSKAR custom HID button `1`. Host-side daemon maps it to key1 config. |
-| Key2 | Implemented | Sends OSKAR custom HID button `2`. Host-side daemon maps it to key2 config. |
-| Key3 | Implemented | Sends OSKAR custom HID button `3`. Host-side daemon maps it to key3 config. |
+| Key1 | Implemented | Sends OSKAR custom HID button `1`; the host pastes configured text. |
+| Key2 | Implemented | Sends OSKAR custom HID button `2`; the host opens the configured URL. |
+| Key3 | Implemented | Sends OSKAR custom HID button `3`; the host activates or launches the configured app. |
 
 ## HID Action Model
 
@@ -107,8 +107,8 @@ The first supported target runtimes are:
 The daemon config is independent for each key:
 
 - `key1_text`: text pasted when custom HID button `1` is received.
-- `key2_text`: text pasted when custom HID button `2` is received.
-- `key3_text`: text pasted when custom HID button `3` is received.
+- `key2_url`: URL opened in the default browser when custom HID button `2` is received. The default is `https://www.arm.com/`.
+- `key3_app`: application selected in the host GUI and activated or launched when custom HID button `3` is received. It has no default.
 
 Config locations:
 
@@ -117,15 +117,11 @@ Config locations:
 
 The daemon reloads config on every key press, so changing config does not require restarting the daemon.
 
-### First-Pass Host Actions
-
-The first implemented action is paste-text for all three keys.
+### Host Actions
 
 - Key1 pastes `key1_text`.
-- Key2 pastes `key2_text`.
-- Key3 pastes `key3_text`.
-
-Future work can replace the paste action with richer per-key workflows while keeping the same trigger/config separation.
+- Key2 asks the operating system to open `key2_url` in the default browser.
+- Key3 focuses an existing window for `key3_app` where the operating system permits it, otherwise launches the selected application. 
 
 ### Registration Model
 

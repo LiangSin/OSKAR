@@ -8,7 +8,7 @@ The firmware sends the three macro keys through a vendor-defined custom HID inte
 - Key2 sends custom HID button `2`
 - Key3 sends custom HID button `3`
 
-The host daemon watches the custom HID reports and pastes configured text. The three keys are independent: each key has its own config value. Because the macro keys are no longer standard keyboard keys, they should not collide with operating-system shortcuts.
+The host daemon watches the custom HID reports and runs the configured action: Key1 pastes text, Key2 opens a URL in the default browser, and Key3 activates or launches an application. Because the macro keys are no longer standard keyboard keys, they should not collide with operating-system shortcuts.
 
 - Linux target machine: use `host-tools/linux/` with the system Python 3.
 - Windows target machine: use `host-tools/windows/` with built-in Windows PowerShell.
@@ -85,7 +85,7 @@ cd /path/to/host-tools/linux
 
 The GUI opens with the current config at the top. If the config file does not exist, the GUI creates it automatically.
 
-Use `Edit` to change the three key values. The edit dialog starts with the current values and has `Cancel` and `Save` buttons.
+Use `Edit` to change Key1 text, the Key2 URL, or the Key3 application. Select `Choose...` to search installed desktop applications by name or launch command. 
 
 The daemon section shows whether the host daemon is running. Use `Refresh`, `Logs`, `Start Daemon`, and `Stop Daemon` from the GUI. When starting or installing the Linux daemon from the GUI, the tool imports the current desktop environment into the user service so clipboard helpers can find Wayland or X11.
 
@@ -128,7 +128,7 @@ powershell -ExecutionPolicy Bypass -File .\oskar-host.ps1 ui
 
 The GUI opens with the current config at the top. If the config file does not exist, the GUI creates it automatically.
 
-Use `Edit` to change the three key values. The edit dialog starts with the current values and has `Cancel` and `Save` buttons.
+Use `Edit` to change Key1 text, the Key2 URL, or the Key3 application. Select `Choose...` to search a named list of installed Start Menu and Microsoft Store apps. The chooser also provides `Browse EXE...` for portable apps which are not registered with Windows.
 
 The daemon section shows whether the host daemon is running. Use `Refresh`, `Logs`, `Start Daemon`, and `Stop Daemon` from the GUI.
 
@@ -168,9 +168,17 @@ Or double-click `START.cmd`.
 
 The daemon reloads the config every time a key is pressed, so changing config does not require restarting the daemon.
 
+The generated config contains:
+
+```text
+key1_text=OSKAR key 1
+key2_url=https://www.arm.com/
+key3_app=
+```
+
 ## Current Limitations
 
 - Linux support reads the OSKAR `/dev/hidraw*` interface. This requires the setup udev rule or equivalent local device permissions.
-- Linux paste support depends on desktop helper commands because shell/Python alone cannot portably paste into arbitrary GUI applications.
+- Linux paste and window-focus support depends on desktop helper commands because shell/Python alone cannot portably control arbitrary GUI applications.
 - Windows support uses PowerShell plus a small C# Raw Input HID source file. It should not require installing anything extra on a normal Windows desktop.
 - macOS is not implemented in this first pass.

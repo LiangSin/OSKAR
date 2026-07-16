@@ -3,6 +3,7 @@ import argparse
 import os
 import pathlib
 import select
+import shlex
 import signal
 import shutil
 import subprocess
@@ -28,9 +29,11 @@ OSKAR_CUSTOM_HID_REPORT_SIZE = 2
 
 DEFAULTS = {
     "key1_text": "OSKAR key 1",
-    "key2_text": "OSKAR key 2",
-    "key3_text": "OSKAR key 3",
+    "key2_url": "https://www.arm.com/",
+    "key3_app": "",
 }
+CONFIG_KEYS = ("key1_text", "key2_url", "key3_app")
+APP_WINDOW_CACHE = {}
 
 SERVICE_NAME = "oskar-host.service"
 
@@ -226,16 +229,16 @@ def save_config(config):
     path = config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = ["# OSKAR host configuration"]
-    for key in ("key1_text", "key2_text", "key3_text"):
+    for key in CONFIG_KEYS:
         lines.append(f"{key}={escape_value(config[key])}")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def print_config(config):
     print(f"config: {config_path()}")
-    print(f"key1 = {config['key1_text']!r}")
-    print(f"key2 = {config['key2_text']!r}")
-    print(f"key3 = {config['key3_text']!r}")
+    print(f"key1 text = {config['key1_text']!r}")
+    print(f"key2 URL = {config['key2_url']!r}")
+    print(f"key3 app = {config['key3_app']!r}")
 
 
 def prefer_wayland():
@@ -292,11 +295,211 @@ def paste_text(text, dry_run):
     send_paste_shortcut()
 
 
+def open_url(url, dry_run):
+    if not url.strip():
+        raise RuntimeError("Key2 URL is empty")
+    if dry_run:
+        print(f"open URL: {url!r}", flush=True)
+        return
+    if not shutil.which("xdg-open"):
+        raise RuntimeError("xdg-open is required to open Key2 URL")
+    subprocess.Popen(
+        ["xdg-open", url],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+
+def xdotool_available():
+    # Native Wayland windows are intentionally unavailable to xdotool, but many
+    # IDEs (including Java/SWT apps) run through XWayland and remain discoverable.
+    return bool(os.environ.get("DISPLAY")) and shutil.which("xdotool") is not None
+
+
+def process_snapshot():
+    processes = {}
+    for proc in pathlib.Path("/proc").glob("[0-9]*"):
+        try:
+            executable = (proc / "exe").resolve()
+            stat = (proc / "stat").read_text(encoding="utf-8", errors="replace")
+            fields = stat[stat.rfind(")") + 2 :].split()
+            parent_pid = int(fields[1])
+            command_line = (proc / "cmdline").read_bytes().replace(b"\0", b" ").decode(
+                "utf-8", errors="replace"
+            )
+            processes[int(proc.name)] = {
+                "executable": executable,
+                "parent_pid": parent_pid,
+                "command_line": command_line,
+            }
+        except (FileNotFoundError, PermissionError, OSError, ValueError, IndexError):
+            continue
+    return processes
+
+
+def related_app_pids(path):
+    wanted = path.resolve()
+    app_directory = str(wanted.parent)
+    processes = process_snapshot()
+    candidates = {
+        pid for pid, process in processes.items() if process["executable"] == wanted
+    }
+
+    # Eclipse-style launchers commonly host their actual window in a Java child
+    # process. Restrict the fallback to Java runtimes whose command line names
+    # this app's installation directory.
+    for pid, process in processes.items():
+        if (
+            process["executable"].name in ("java", "javaw")
+            and app_directory in process["command_line"]
+        ):
+            candidates.add(pid)
+
+    while True:
+        descendants = {
+            pid
+            for pid, process in processes.items()
+            if process["parent_pid"] in candidates
+        }
+        previous_size = len(candidates)
+        candidates.update(descendants)
+        if len(candidates) == previous_size:
+            break
+    return candidates
+
+
+def visible_x11_windows(pid):
+    result = subprocess.run(
+        ["xdotool", "search", "--onlyvisible", "--pid", str(pid)],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    if result.returncode != 0:
+        return []
+    return [line.strip() for line in result.stdout.splitlines() if line.strip().isdigit()]
+
+
+def activate_x11_window(window_id):
+    result = subprocess.run(
+        ["xdotool", "windowactivate", "--sync", str(window_id)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def focus_existing_app(path, cache_key):
+    if not xdotool_available():
+        return False
+
+    cached = APP_WINDOW_CACHE.get(cache_key)
+    if cached:
+        result = subprocess.run(
+            ["xdotool", "getwindowpid", cached["window_id"]],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        if result.returncode == 0 and result.stdout.strip() == str(cached["pid"]):
+            if activate_x11_window(cached["window_id"]):
+                return True
+        APP_WINDOW_CACHE.pop(cache_key, None)
+
+    for pid in related_app_pids(path):
+        for window_id in visible_x11_windows(pid):
+            if activate_x11_window(window_id):
+                APP_WINDOW_CACHE[cache_key] = {"pid": pid, "window_id": window_id}
+                write_log(f"key3 focusing existing window; pid={pid}; window={window_id}")
+                return True
+    return False
+
+
+def desktop_launcher_executable(path):
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        if not line.startswith("Exec="):
+            continue
+        try:
+            words = shlex.split(line[5:])
+        except ValueError:
+            return None
+        if not words:
+            return None
+        if words[0] == "env":
+            words = [word for word in words[1:] if "=" not in word]
+        if not words:
+            return None
+        executable = pathlib.Path(words[0])
+        if not executable.is_absolute():
+            resolved = shutil.which(words[0])
+            if not resolved:
+                return None
+            executable = pathlib.Path(resolved)
+        return executable
+    return None
+
+
+def open_app(value, dry_run):
+    if not value.strip():
+        if dry_run:
+            print("open app: not configured", flush=True)
+        return
+
+    path = pathlib.Path(value).expanduser()
+    if not path.exists():
+        raise RuntimeError(f"Key3 app does not exist: {path}")
+    if dry_run:
+        print(f"open app: {str(path)!r}", flush=True)
+        return
+
+    if path.suffix.lower() == ".desktop":
+        if not shutil.which("gio"):
+            raise RuntimeError("gio is required to launch a .desktop application")
+        executable = desktop_launcher_executable(path)
+        if executable and focus_existing_app(executable, str(path.resolve())):
+            return
+        command = ["gio", "launch", str(path)]
+    else:
+        if not path.is_file() or not os.access(path, os.X_OK):
+            raise RuntimeError(f"Key3 app is not executable: {path}")
+        if focus_existing_app(path, str(path.resolve())):
+            return
+        command = [str(path)]
+
+    # Launching a single-instance/GApplication app also asks it to focus its
+    # existing window. This is the portable fallback where the compositor does
+    # not permit other processes to force-focus a window (notably Wayland).
+    write_log(f"key3 found no existing window; launching: {path}")
+    subprocess.Popen(
+        command,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+
+def perform_button_action(button, config, dry_run):
+    if button == "key1":
+        paste_text(config["key1_text"], dry_run)
+    elif button == "key2":
+        open_url(config["key2_url"], dry_run)
+    elif button == "key3":
+        open_app(config["key3_app"], dry_run)
+
+
 def button_to_config_key(button):
     return {
         "key1": "key1_text",
-        "key2": "key2_text",
-        "key3": "key3_text",
+        "key2": "key2_url",
+        "key3": "key3_app",
     }[button]
 
 
@@ -390,6 +593,166 @@ def command_set(args):
     print_config(config)
 
 
+def desktop_entry_details(path):
+    values = {}
+    section = None
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        line = line.strip()
+        if line.startswith("[") and line.endswith("]"):
+            section = line
+            continue
+        if section != "[Desktop Entry]" or not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key] = value
+
+    if (
+        values.get("Type", "Application") != "Application"
+        or values.get("Hidden", "false").lower() == "true"
+        or values.get("NoDisplay", "false").lower() == "true"
+        or not values.get("Exec")
+    ):
+        return None
+
+    locale_name = os.environ.get("LC_MESSAGES") or os.environ.get("LANG", "")
+    locale_name = locale_name.split(".", 1)[0]
+    localized_keys = []
+    if locale_name:
+        localized_keys.append(f"Name[{locale_name}]")
+        if "_" in locale_name:
+            localized_keys.append(f"Name[{locale_name.split('_', 1)[0]}]")
+    name = next((values[key] for key in localized_keys if values.get(key)), values.get("Name"))
+    if not name:
+        return None
+    return {"name": name, "command": values["Exec"], "path": str(path)}
+
+
+def installed_desktop_apps():
+    data_home = pathlib.Path(
+        os.environ.get("XDG_DATA_HOME", pathlib.Path.home() / ".local" / "share")
+    )
+    data_dirs = [
+        pathlib.Path(value)
+        for value in os.environ.get("XDG_DATA_DIRS", "/usr/local/share:/usr/share").split(":")
+        if value
+    ]
+    applications = {}
+    for root in [data_home, *data_dirs]:
+        directory = root / "applications"
+        if not directory.is_dir():
+            continue
+        for path in directory.rglob("*.desktop"):
+            details = desktop_entry_details(path)
+            if details:
+                applications.setdefault(details["name"].casefold(), details)
+    return sorted(applications.values(), key=lambda app: app["name"].casefold())
+
+
+def show_app_picker_dialog(parent, current):
+    import tkinter as tk
+    from tkinter import filedialog, ttk
+
+    apps = installed_desktop_apps()
+    result = {"path": None}
+    visible_apps = {}
+
+    dialog = tk.Toplevel(parent)
+    dialog.title("Choose an installed application")
+    dialog.geometry("760x500")
+    dialog.minsize(620, 400)
+    dialog.transient(parent)
+    dialog.grab_set()
+    dialog.columnconfigure(0, weight=1)
+    dialog.rowconfigure(1, weight=1)
+
+    search_frame = ttk.Frame(dialog, padding=(16, 16, 16, 8))
+    search_frame.grid(row=0, column=0, sticky="ew")
+    search_frame.columnconfigure(1, weight=1)
+    ttk.Label(search_frame, text="Search installed apps").grid(row=0, column=0, padx=(0, 10))
+    search_var = tk.StringVar()
+    search_entry = ttk.Entry(search_frame, textvariable=search_var)
+    search_entry.grid(row=0, column=1, sticky="ew")
+
+    list_frame = ttk.Frame(dialog, padding=(16, 0, 16, 8))
+    list_frame.grid(row=1, column=0, sticky="nsew")
+    list_frame.columnconfigure(0, weight=1)
+    list_frame.rowconfigure(0, weight=1)
+    tree = ttk.Treeview(list_frame, columns=("name", "command"), show="headings", selectmode="browse")
+    tree.heading("name", text="Application")
+    tree.heading("command", text="Launch command")
+    tree.column("name", width=230, minwidth=140)
+    tree.column("command", width=470, minwidth=220)
+    tree.grid(row=0, column=0, sticky="nsew")
+    scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=tree.yview)
+    scrollbar.grid(row=0, column=1, sticky="ns")
+    tree.configure(yscrollcommand=scrollbar.set)
+
+    button_frame = ttk.Frame(dialog, padding=(16, 8, 16, 16))
+    button_frame.grid(row=2, column=0, sticky="ew")
+    button_frame.columnconfigure(1, weight=1)
+
+    def close():
+        dialog.destroy()
+
+    def choose_selected():
+        selection = tree.selection()
+        if selection:
+            result["path"] = visible_apps[selection[0]]["path"]
+            dialog.destroy()
+
+    def browse_executable():
+        current_path = pathlib.Path(current).expanduser() if current else None
+        initial_dir = current_path.parent if current_path and current_path.exists() else pathlib.Path("/usr/bin")
+        selected = filedialog.askopenfilename(
+            parent=dialog,
+            title="Choose an application executable",
+            initialdir=str(initial_dir),
+            filetypes=(("All files", "*"),),
+        )
+        if selected:
+            result["path"] = selected
+            dialog.destroy()
+
+    select_button = ttk.Button(button_frame, text="Select", command=choose_selected, state="disabled")
+    ttk.Button(button_frame, text="Browse executable...", command=browse_executable).grid(
+        row=0, column=0, sticky="w"
+    )
+    ttk.Button(button_frame, text="Cancel", command=close).grid(row=0, column=2, padx=(8, 0))
+    select_button.grid(row=0, column=3, padx=(8, 0))
+
+    def refresh(*_args):
+        query = search_var.get().strip().casefold()
+        children = tree.get_children()
+        if children:
+            tree.delete(*children)
+        visible_apps.clear()
+        for index, app in enumerate(apps):
+            if query and query not in app["name"].casefold() and query not in app["command"].casefold():
+                continue
+            item_id = f"app-{index}"
+            tree.insert("", "end", iid=item_id, values=(app["name"], app["command"]))
+            visible_apps[item_id] = app
+            if app["path"] == current:
+                tree.selection_set(item_id)
+                tree.see(item_id)
+        select_button.configure(state="normal" if tree.selection() else "disabled")
+
+    tree.bind("<<TreeviewSelect>>", lambda _event: select_button.configure(state="normal"))
+    tree.bind("<Double-1>", lambda _event: choose_selected())
+    dialog.bind("<Escape>", lambda _event: close())
+    dialog.bind("<Return>", lambda _event: choose_selected())
+    search_var.trace_add("write", refresh)
+    refresh()
+    search_entry.focus_set()
+    parent.wait_window(dialog)
+    parent.grab_set()
+    return result["path"]
+
+
 def show_edit_config_dialog(parent, on_saved):
     import tkinter as tk
     from tkinter import ttk
@@ -406,9 +769,9 @@ def show_edit_config_dialog(parent, on_saved):
 
     fields = {}
     rows = [
-        ("Key 1", "key1_text"),
-        ("Key 2", "key2_text"),
-        ("Key 3", "key3_text"),
+        ("Key 1 text", "key1_text"),
+        ("Key 2 URL", "key2_url"),
+        ("Key 3 app", "key3_app"),
     ]
     for index, (label_text, key) in enumerate(rows):
         ttk.Label(frame, text=label_text).grid(row=index, column=0, sticky="w", pady=6)
@@ -416,6 +779,16 @@ def show_edit_config_dialog(parent, on_saved):
         entry.insert(0, config[key])
         entry.grid(row=index, column=1, sticky="ew", padx=(12, 0), pady=6)
         fields[key] = entry
+
+    def browse_app():
+        selected = show_app_picker_dialog(dialog, fields["key3_app"].get())
+        if selected:
+            fields["key3_app"].delete(0, "end")
+            fields["key3_app"].insert(0, selected)
+
+    ttk.Button(frame, text="Choose...", command=browse_app).grid(
+        row=2, column=2, sticky="w", padx=(8, 0), pady=6
+    )
 
     buttons = ttk.Frame(frame)
     buttons.grid(row=3, column=0, columnspan=2, sticky="e", pady=(14, 0))
@@ -510,8 +883,8 @@ def command_ui(_args):
         current = load_config()
         save_config(current)
         key1_var.set(f"Key1: {current['key1_text']}")
-        key2_var.set(f"Key2: {current['key2_text']}")
-        key3_var.set(f"Key3: {current['key3_text']}")
+        key2_var.set(f"Key2 URL: {current['key2_url']}")
+        key3_var.set(f"Key3 app: {current['key3_app'] or '(not configured)'}")
 
     def refresh_status():
         status_text.configure(state="normal")
@@ -701,10 +1074,10 @@ def command_daemon(args):
             config = load_config()
             write_log(f"{button} pressed")
             try:
-                paste_text(config[button_to_config_key(button)], args.dry_run)
+                perform_button_action(button, config, args.dry_run)
             except Exception as error:
-                write_log(f"paste failed: {error}")
-                print(f"paste failed: {error}", file=sys.stderr, flush=True)
+                write_log(f"{button} action failed: {error}")
+                print(f"{button} action failed: {error}", file=sys.stderr, flush=True)
     finally:
         if not args.stdin and read_pid() == os.getpid():
             try:

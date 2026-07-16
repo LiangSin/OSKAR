@@ -70,8 +70,8 @@ main() {
         say "ERROR: setup.sh currently supports apt-based Linux distributions."
         say "Install these manually, then open: $GUI"
         say "- python3"
-        say "- python3-tk"
-        say "- Wayland: wl-clipboard wtype"
+        say "- python3-tk, xdg-utils, libglib2.0-bin"
+        say "- Wayland: wl-clipboard wtype xdotool (for XWayland app focus)"
         say "- X11: xclip xdotool"
         exit 1
     fi
@@ -79,10 +79,10 @@ main() {
     session=$(detect_session)
     say "Detected desktop session: $session"
 
-    packages="python3 python3-tk"
+    packages="python3 python3-tk xdg-utils libglib2.0-bin"
     case "$session" in
         wayland)
-            packages="$packages wl-clipboard wtype"
+            packages="$packages wl-clipboard wtype xdotool"
             ;;
         x11)
             packages="$packages xclip xdotool"

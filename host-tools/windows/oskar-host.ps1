@@ -18,6 +18,7 @@ $StartupName = "OSKAR Host Daemon"
 $RunKeyPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
 $HostKeyDebounceMs = 150
 $LastHostKeyPress = @{}
+$AppWindowCache = @{}
 
 function Get-ScriptDir {
     return Split-Path -Parent $PSCommandPath
@@ -139,8 +140,8 @@ function ConvertFrom-EscapedValue([string]$Value) {
 function New-DefaultConfig {
     return [ordered]@{
         key1_text = "OSKAR key 1"
-        key2_text = "OSKAR key 2"
-        key3_text = "OSKAR key 3"
+        key2_url = "https://www.arm.com/"
+        key3_app = ""
     }
 }
 
@@ -170,7 +171,7 @@ function Save-Config($Config) {
     $parent = Split-Path -Parent $path
     New-Item -ItemType Directory -Force -Path $parent | Out-Null
     $lines = @("# OSKAR host configuration")
-    foreach ($key in @("key1_text", "key2_text", "key3_text")) {
+    foreach ($key in @("key1_text", "key2_url", "key3_app")) {
         $value = ConvertTo-EscapedValue ($Config[$key])
         $lines += "$key=$value"
     }
@@ -179,16 +180,16 @@ function Save-Config($Config) {
 
 function Show-Config($Config) {
     Write-Host "config: $(Get-ConfigPath)"
-    Write-Host "key1 = $($Config["key1_text"])"
-    Write-Host "key2 = $($Config["key2_text"])"
-    Write-Host "key3 = $($Config["key3_text"])"
+    Write-Host "key1 text = $($Config["key1_text"])"
+    Write-Host "key2 URL = $($Config["key2_url"])"
+    Write-Host "key3 app = $($Config["key3_app"])"
 }
 
 function Resolve-Button([string]$Value) {
     switch ($Value.ToLowerInvariant()) {
         { $_ -in @("1", "key1", "f13") } { return "key1_text" }
-        { $_ -in @("2", "key2", "f14") } { return "key2_text" }
-        { $_ -in @("3", "key3", "f15") } { return "key3_text" }
+        { $_ -in @("2", "key2", "f14") } { return "key2_url" }
+        { $_ -in @("3", "key3", "f15") } { return "key3_app" }
         default { throw "button must be key1, key2, or key3" }
     }
 }
@@ -202,6 +203,553 @@ function Paste-Text([string]$Value) {
     Set-Clipboard -Value $Value
     Add-Type -AssemblyName System.Windows.Forms
     [System.Windows.Forms.SendKeys]::SendWait("^v")
+}
+
+function Open-Url([string]$Value) {
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        throw "Key2 URL is empty"
+    }
+    if ($DryRun) {
+        Write-Host "open URL: $Value"
+        return
+    }
+    Start-Process $Value
+}
+
+function Ensure-WindowActivatorType {
+    if (-not ("OskarWindowActivator" -as [type])) {
+        Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+
+public static class OskarWindowActivator {
+    private delegate bool EnumWindowsCallback(IntPtr hWnd, IntPtr lParam);
+    private static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
+    private static readonly IntPtr HWND_NOTOPMOST = new IntPtr(-2);
+    private const uint SWP_NOSIZE = 0x0001;
+    private const uint SWP_NOMOVE = 0x0002;
+    private const uint SWP_SHOWWINDOW = 0x0040;
+
+    [DllImport("user32.dll")]
+    public static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
+
+    [DllImport("user32.dll")]
+    private static extern bool IsIconic(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, IntPtr processId);
+
+    [DllImport("user32.dll", EntryPoint = "GetWindowThreadProcessId")]
+    private static extern uint GetWindowThreadProcessIdForWindow(IntPtr hWnd, out uint processId);
+
+    [DllImport("kernel32.dll")]
+    private static extern uint GetCurrentThreadId();
+
+    [DllImport("user32.dll")]
+    private static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool attach);
+
+    [DllImport("user32.dll")]
+    private static extern bool BringWindowToTop(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern bool SetWindowPos(
+        IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint flags);
+
+    [DllImport("user32.dll")]
+    private static extern bool EnumWindows(EnumWindowsCallback callback, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern bool IsWindowVisible(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern bool IsWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern int GetWindowTextLength(IntPtr hWnd);
+
+    [DllImport("shell32.dll")]
+    private static extern int SHGetKnownFolderPath(
+        ref Guid rfid, uint flags, IntPtr token, out IntPtr path);
+
+    public static string GetKnownFolderPath(Guid folderId) {
+        IntPtr path = IntPtr.Zero;
+        try {
+            int result = SHGetKnownFolderPath(ref folderId, 0, IntPtr.Zero, out path);
+            return result == 0 && path != IntPtr.Zero ? Marshal.PtrToStringUni(path) : null;
+        } finally {
+            if (path != IntPtr.Zero) Marshal.FreeCoTaskMem(path);
+        }
+    }
+
+    public static IntPtr FindVisibleTopLevelWindow(uint processId) {
+        IntPtr found = IntPtr.Zero;
+        EnumWindows(delegate(IntPtr hWnd, IntPtr lParam) {
+            uint ownerProcessId;
+            GetWindowThreadProcessIdForWindow(hWnd, out ownerProcessId);
+            if (ownerProcessId == processId && IsWindowVisible(hWnd) && GetWindowTextLength(hWnd) > 0) {
+                found = hWnd;
+                return false;
+            }
+            return true;
+        }, IntPtr.Zero);
+        return found;
+    }
+
+    public static bool IsUsableWindow(IntPtr hWnd, uint expectedProcessId) {
+        if (hWnd == IntPtr.Zero || !IsWindow(hWnd) || !IsWindowVisible(hWnd)) return false;
+        uint actualProcessId;
+        GetWindowThreadProcessIdForWindow(hWnd, out actualProcessId);
+        return actualProcessId == expectedProcessId;
+    }
+
+    public static bool Activate(IntPtr hWnd) {
+        if (hWnd == IntPtr.Zero) return false;
+
+        // SW_RESTORE changes a maximized window back to its normal size when
+        // called unconditionally. Only restore windows which are minimized.
+        if (IsIconic(hWnd)) ShowWindowAsync(hWnd, 9);
+
+        IntPtr foreground = GetForegroundWindow();
+        uint currentThread = GetCurrentThreadId();
+        uint targetThread = GetWindowThreadProcessId(hWnd, IntPtr.Zero);
+        uint foregroundThread = foreground == IntPtr.Zero
+            ? 0
+            : GetWindowThreadProcessId(foreground, IntPtr.Zero);
+        bool attachedTarget = false;
+        bool attachedForeground = false;
+
+        try {
+            if (targetThread != 0 && targetThread != currentThread)
+                attachedTarget = AttachThreadInput(currentThread, targetThread, true);
+            if (foregroundThread != 0 && foregroundThread != currentThread && foregroundThread != targetThread)
+                attachedForeground = AttachThreadInput(currentThread, foregroundThread, true);
+
+            BringWindowToTop(hWnd);
+            SetForegroundWindow(hWnd);
+
+            // A brief topmost toggle reliably raises the window without moving,
+            // resizing, maximizing, or restoring it to its normal dimensions.
+            SetWindowPos(hWnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+            SetWindowPos(hWnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+            SetForegroundWindow(hWnd);
+            return GetForegroundWindow() == hWnd;
+        } finally {
+            if (attachedForeground) AttachThreadInput(currentThread, foregroundThread, false);
+            if (attachedTarget) AttachThreadInput(currentThread, targetThread, false);
+        }
+    }
+}
+"@
+    }
+}
+
+function Get-ShortcutTargetPath([string]$ShortcutPath) {
+    try {
+        $shell = New-Object -ComObject WScript.Shell
+        $shortcut = $shell.CreateShortcut($ShortcutPath)
+        if (-not $shortcut.TargetPath) { return $null }
+        return [Environment]::ExpandEnvironmentVariables($shortcut.TargetPath)
+    } catch {
+        return $null
+    }
+}
+
+function Get-ShortcutProcessName([string]$ShortcutPath) {
+    try {
+        $shell = New-Object -ComObject WScript.Shell
+        $shortcut = $shell.CreateShortcut($ShortcutPath)
+        if ($shortcut.Arguments -match '(?i)--processStart\s+"?([^"\s]+)') {
+            return [IO.Path]::GetFileNameWithoutExtension($Matches[1])
+        }
+    } catch {
+        return $null
+    }
+    return $null
+}
+
+function Resolve-AppsFolderExecutablePath([string]$Value) {
+    $prefix = "shell:AppsFolder\"
+    if (-not $Value.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+        return $null
+    }
+
+    $itemPath = $Value.Substring($prefix.Length)
+    if ([IO.File]::Exists($itemPath) -and [IO.Path]::GetExtension($itemPath) -ieq ".exe") {
+        return [IO.Path]::GetFullPath($itemPath)
+    }
+    if ($itemPath -notmatch '^\{([0-9A-Fa-f-]{36})\}\\(.+)$') {
+        return $null
+    }
+    $folderId = [Guid]$Matches[1]
+    $relativePath = $Matches[2]
+
+    try {
+        Ensure-WindowActivatorType
+        $root = [OskarWindowActivator]::GetKnownFolderPath($folderId)
+        if (-not $root) { return $null }
+        $root = [IO.Path]::GetFullPath($root).TrimEnd('\') + '\'
+        $candidate = [IO.Path]::GetFullPath((Join-Path $root $relativePath))
+        if (-not $candidate.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) {
+            return $null
+        }
+        if ([IO.File]::Exists($candidate) -and [IO.Path]::GetExtension($candidate) -ieq ".exe") {
+            return $candidate
+        }
+    } catch {
+        return $null
+    }
+    return $null
+}
+
+function Get-RelatedAppProcessIds([string]$ExecutablePath) {
+    try {
+        $snapshot = @(Get-CimInstance Win32_Process -ErrorAction Stop)
+        $candidateIds = New-Object 'System.Collections.Generic.HashSet[int]'
+        $appDirectory = [IO.Path]::GetDirectoryName($ExecutablePath)
+
+        foreach ($item in $snapshot) {
+            if ($item.ExecutablePath -and $item.ExecutablePath -eq $ExecutablePath) {
+                [void]$candidateIds.Add([int]$item.ProcessId)
+            }
+        }
+
+        # Eclipse-style launchers may host their window in a Java child process.
+        # Its command line normally contains the launcher's installation folder,
+        # even when the original launcher process has already exited.
+        if ($appDirectory) {
+            foreach ($item in $snapshot) {
+                $isJavaRuntime = $item.Name -in @("java.exe", "javaw.exe")
+                $referencesExecutable = $item.CommandLine -and
+                    $item.CommandLine.IndexOf($ExecutablePath, [StringComparison]::OrdinalIgnoreCase) -ge 0
+                if ($item.CommandLine -and ($isJavaRuntime -or $referencesExecutable) -and
+                    $item.CommandLine.IndexOf($appDirectory, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+                    [void]$candidateIds.Add([int]$item.ProcessId)
+                }
+            }
+        }
+
+        do {
+            $addedDescendant = $false
+            foreach ($item in $snapshot) {
+                if ($candidateIds.Contains([int]$item.ParentProcessId) -and
+                    $candidateIds.Add([int]$item.ProcessId)) {
+                    $addedDescendant = $true
+                }
+            }
+        } while ($addedDescendant)
+
+        return @($candidateIds | Sort-Object)
+    } catch {
+        Write-Log "could not inspect Key3 process tree: $($_.Exception.Message)"
+        return @()
+    }
+}
+
+function Save-AppWindowCache([string]$CacheKey, [int]$ProcessId, [IntPtr]$WindowHandle) {
+    $script:AppWindowCache[$CacheKey] = [PSCustomObject]@{
+        ProcessId = $ProcessId
+        WindowHandle = $WindowHandle.ToInt64()
+    }
+}
+
+function Focus-CachedAppWindow([string]$CacheKey) {
+    if (-not $script:AppWindowCache.ContainsKey($CacheKey)) { return $false }
+
+    $entry = $script:AppWindowCache[$CacheKey]
+    try {
+        $windowHandle = [IntPtr]$entry.WindowHandle
+        if ([OskarWindowActivator]::IsUsableWindow($windowHandle, [uint32]$entry.ProcessId)) {
+            [void][OskarWindowActivator]::Activate($windowHandle)
+            return $true
+        }
+    } catch {
+        # A closed/restarted app invalidates the cached PID or window handle.
+    }
+
+    [void]$script:AppWindowCache.Remove($CacheKey)
+    return $false
+}
+
+function Open-App([string]$Value) {
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        if ($DryRun) { Write-Host "open app: not configured" }
+        return
+    }
+
+    $isAppsFolderEntry = $Value.StartsWith("shell:AppsFolder\", [StringComparison]::OrdinalIgnoreCase)
+    if (-not $isAppsFolderEntry -and -not (Test-Path -LiteralPath $Value -PathType Leaf)) {
+        throw "Key3 app does not exist: $Value"
+    }
+    $resolvedAppsFolderPath = if ($isAppsFolderEntry) {
+        Resolve-AppsFolderExecutablePath $Value
+    } else {
+        $null
+    }
+    if ($resolvedAppsFolderPath) { $isAppsFolderEntry = $false }
+    $path = if ($resolvedAppsFolderPath) {
+        $resolvedAppsFolderPath
+    } elseif ($isAppsFolderEntry) {
+        $Value
+    } else {
+        (Resolve-Path -LiteralPath $Value).Path
+    }
+    if ($DryRun) {
+        Write-Host "open app: $path"
+        return
+    }
+
+    if ($isAppsFolderEntry) {
+        Start-Process -FilePath "explorer.exe" -ArgumentList $path
+        return
+    }
+
+    $matchPath = $path
+    $matchProcessName = $null
+    if ([IO.Path]::GetExtension($path) -ieq ".lnk") {
+        $matchPath = Get-ShortcutTargetPath $path
+        $matchProcessName = Get-ShortcutProcessName $path
+    }
+
+    Ensure-WindowActivatorType
+    $cacheKey = $path.ToLowerInvariant()
+    if (Focus-CachedAppWindow $cacheKey) { return }
+
+    $processNames = @()
+    if ($matchPath -and [IO.Path]::GetExtension($matchPath) -ieq ".exe") {
+        $processNames += [IO.Path]::GetFileNameWithoutExtension($matchPath)
+    }
+    if ($matchProcessName) { $processNames += $matchProcessName }
+
+    $matchingProcesses = @{}
+    foreach ($processName in @($processNames | Select-Object -Unique)) {
+        foreach ($candidate in @(Get-Process -Name $processName -ErrorAction SilentlyContinue)) {
+            $matchingProcesses[$candidate.Id] = $candidate
+        }
+    }
+    foreach ($process in $matchingProcesses.Values) {
+        try {
+            $pathMatches = $matchPath -and $process.Path -and $process.Path -eq $matchPath
+            $nameMatches = $matchProcessName -and $process.ProcessName -eq $matchProcessName
+            if (-not $pathMatches -and -not $nameMatches) { continue }
+            $process.Refresh()
+            $windowHandle = $process.MainWindowHandle
+            if ($windowHandle -eq [IntPtr]::Zero) {
+                $windowHandle = [OskarWindowActivator]::FindVisibleTopLevelWindow([uint32]$process.Id)
+            }
+            if ($windowHandle -ne [IntPtr]::Zero) {
+                Write-Log "key3 focusing existing window; pid=$($process.Id); match=executable"
+                Save-AppWindowCache $cacheKey $process.Id $windowHandle
+                [void][OskarWindowActivator]::Activate($windowHandle)
+                return
+            }
+        } catch {
+            continue
+        }
+    }
+
+    $relatedExecutablePath = if ($matchPath -and [IO.Path]::GetExtension($matchPath) -ieq ".exe") {
+        $matchPath
+    } else {
+        $null
+    }
+    if ($relatedExecutablePath) {
+        $relatedProcessIds = @(Get-RelatedAppProcessIds $relatedExecutablePath)
+        foreach ($processId in $relatedProcessIds) {
+            try {
+                $windowHandle = [OskarWindowActivator]::FindVisibleTopLevelWindow([uint32]$processId)
+                if ($windowHandle -ne [IntPtr]::Zero) {
+                    Write-Log "key3 focusing existing window; pid=$processId; match=related-process"
+                    Save-AppWindowCache $cacheKey $processId $windowHandle
+                    [void][OskarWindowActivator]::Activate($windowHandle)
+                    return
+                }
+            } catch {
+                continue
+            }
+        }
+        if ($relatedProcessIds.Count -gt 0) {
+            Write-Log "key3 related processes have no visible window; pids=$($relatedProcessIds -join ',')"
+        }
+    }
+
+    # Launching again is also the correct activation request for apps which own
+    # their single-instance behavior and do not expose the window on this process.
+    Write-Log "key3 found no existing window; launching: $path"
+    Start-Process -FilePath $path
+}
+
+function Get-InstalledApplications {
+    $applications = @{}
+    $programFolders = @(
+        [Environment]::GetFolderPath([System.Environment+SpecialFolder]::Programs),
+        [Environment]::GetFolderPath([System.Environment+SpecialFolder]::CommonPrograms)
+    ) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Container) }
+
+    foreach ($folder in $programFolders) {
+        foreach ($shortcut in Get-ChildItem -LiteralPath $folder -Filter "*.lnk" -File -Recurse -ErrorAction SilentlyContinue) {
+            $target = Get-ShortcutTargetPath $shortcut.FullName
+            if (-not $target -or [IO.Path]::GetExtension($target) -ine ".exe") { continue }
+            $key = $shortcut.BaseName.ToLowerInvariant()
+            if ($applications.ContainsKey($key)) { continue }
+            $applications[$key] = [PSCustomObject]@{
+                Name = $shortcut.BaseName
+                LaunchPath = $shortcut.FullName
+                Detail = $target
+            }
+        }
+    }
+
+    # AppsFolder also includes Microsoft Store and other registered apps which
+    # may not expose a normal executable in Program Files.
+    try {
+        $shell = New-Object -ComObject Shell.Application
+        $folder = $shell.Namespace("shell:AppsFolder")
+        foreach ($item in $folder.Items()) {
+            $name = [string]$item.Name
+            $itemPath = [string]$item.Path
+            if (-not $name -or -not $itemPath) { continue }
+            $key = $name.ToLowerInvariant()
+            if ($applications.ContainsKey($key)) { continue }
+            $virtualPath = "shell:AppsFolder\$itemPath"
+            $resolvedPath = Resolve-AppsFolderExecutablePath $virtualPath
+            $launchPath = if ([IO.File]::Exists($itemPath)) {
+                $itemPath
+            } elseif ($resolvedPath) {
+                $resolvedPath
+            } else {
+                $virtualPath
+            }
+            $applications[$key] = [PSCustomObject]@{
+                Name = $name
+                LaunchPath = $launchPath
+                Detail = $itemPath
+            }
+        }
+    } catch {
+        Write-Log "could not enumerate AppsFolder: $($_.Exception.Message)"
+    }
+
+    return @($applications.Values | Sort-Object Name)
+}
+
+function Show-AppPickerDialog($Owner, [string]$CurrentPath) {
+    $dialog = New-Object System.Windows.Forms.Form
+    $dialog.Text = "Choose an installed application"
+    $dialog.StartPosition = "CenterParent"
+    $dialog.FormBorderStyle = "FixedDialog"
+    $dialog.MaximizeBox = $false
+    $dialog.MinimizeBox = $false
+    $dialog.ClientSize = New-Object System.Drawing.Size(620, 470)
+
+    $searchLabel = New-Object System.Windows.Forms.Label
+    $searchLabel.Text = "Search installed apps"
+    $searchLabel.Location = New-Object System.Drawing.Point(16, 16)
+    $searchLabel.Size = New-Object System.Drawing.Size(180, 20)
+    $dialog.Controls.Add($searchLabel)
+
+    $searchBox = New-Object System.Windows.Forms.TextBox
+    $searchBox.Location = New-Object System.Drawing.Point(16, 39)
+    $searchBox.Size = New-Object System.Drawing.Size(588, 25)
+    $dialog.Controls.Add($searchBox)
+
+    $list = New-Object System.Windows.Forms.ListBox
+    $list.Location = New-Object System.Drawing.Point(16, 76)
+    $list.Size = New-Object System.Drawing.Size(588, 310)
+    $list.DisplayMember = "Name"
+    $dialog.Controls.Add($list)
+
+    $detailLabel = New-Object System.Windows.Forms.Label
+    $detailLabel.Location = New-Object System.Drawing.Point(16, 394)
+    $detailLabel.Size = New-Object System.Drawing.Size(588, 36)
+    $detailLabel.AutoEllipsis = $true
+    $dialog.Controls.Add($detailLabel)
+
+    $browseButton = New-Object System.Windows.Forms.Button
+    $browseButton.Text = "Browse EXE..."
+    $browseButton.Location = New-Object System.Drawing.Point(16, 434)
+    $browseButton.Size = New-Object System.Drawing.Size(110, 28)
+    $dialog.Controls.Add($browseButton)
+
+    $cancelButton = New-Object System.Windows.Forms.Button
+    $cancelButton.Text = "Cancel"
+    $cancelButton.Location = New-Object System.Drawing.Point(428, 434)
+    $cancelButton.Size = New-Object System.Drawing.Size(82, 28)
+    $cancelButton.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+    $dialog.Controls.Add($cancelButton)
+
+    $selectButton = New-Object System.Windows.Forms.Button
+    $selectButton.Text = "Select"
+    $selectButton.Location = New-Object System.Drawing.Point(522, 434)
+    $selectButton.Size = New-Object System.Drawing.Size(82, 28)
+    $selectButton.Enabled = $false
+    $dialog.Controls.Add($selectButton)
+
+    $result = [PSCustomObject]@{ Path = $null }
+    $allApps = @(Get-InstalledApplications)
+    $refreshList = {
+        $query = $searchBox.Text.Trim()
+        $list.BeginUpdate()
+        $list.Items.Clear()
+        foreach ($app in $allApps) {
+            if (-not $query -or $app.Name.IndexOf($query, [StringComparison]::CurrentCultureIgnoreCase) -ge 0) {
+                [void]$list.Items.Add($app)
+            }
+        }
+        $list.EndUpdate()
+    }
+
+    $searchBox.Add_TextChanged({ & $refreshList })
+    $list.Add_SelectedIndexChanged({
+        $selected = $list.SelectedItem
+        $selectButton.Enabled = $null -ne $selected
+        $detailLabel.Text = if ($selected) { $selected.Detail } else { "" }
+    })
+    $selectButton.Add_Click({
+        if ($list.SelectedItem) {
+            $result.Path = $list.SelectedItem.LaunchPath
+            $dialog.DialogResult = [System.Windows.Forms.DialogResult]::OK
+            $dialog.Close()
+        }
+    })
+    $list.Add_DoubleClick({ if ($list.SelectedItem) { $selectButton.PerformClick() } })
+    $browseButton.Add_Click({
+        $picker = New-Object System.Windows.Forms.OpenFileDialog
+        $picker.Title = "Choose an application executable"
+        $picker.Filter = "Applications (*.exe)|*.exe|All files (*.*)|*.*"
+        $picker.CheckFileExists = $true
+        if ($CurrentPath -and [IO.File]::Exists($CurrentPath)) {
+            $picker.InitialDirectory = Split-Path -Parent $CurrentPath
+        }
+        if ($picker.ShowDialog($dialog) -eq [System.Windows.Forms.DialogResult]::OK) {
+            $result.Path = $picker.FileName
+            $dialog.DialogResult = [System.Windows.Forms.DialogResult]::OK
+            $dialog.Close()
+        }
+        $picker.Dispose()
+    })
+
+    $dialog.AcceptButton = $selectButton
+    $dialog.CancelButton = $cancelButton
+    & $refreshList
+    if ($CurrentPath) {
+        foreach ($app in $allApps) {
+            if ($app.LaunchPath -eq $CurrentPath) {
+                $list.SelectedItem = $app
+                $list.TopIndex = [Math]::Max(0, $list.SelectedIndex - 4)
+                break
+            }
+        }
+    }
+    [void]$searchBox.Focus()
+    [void]$dialog.ShowDialog($Owner)
+    $dialog.Dispose()
+    return $result.Path
 }
 
 function Should-HandleHostKey([string]$Key) {
@@ -259,17 +807,17 @@ function Start-Daemon {
                 2 {
                     if (-not (Should-HandleHostKey "key2")) { return }
                     Write-Log "key2 pressed"
-                    Paste-Text ($config["key2_text"])
+                    Open-Url ($config["key2_url"])
                 }
                 3 {
                     if (-not (Should-HandleHostKey "key3")) { return }
                     Write-Log "key3 pressed"
-                    Paste-Text ($config["key3_text"])
+                    Open-App ($config["key3_app"])
                 }
             }
         } catch {
-            Write-Log "paste failed: $($_.Exception.Message)"
-            Write-Host "paste failed: $($_.Exception.Message)"
+            Write-Log "key action failed: $($_.Exception.Message)"
+            Write-Host "key action failed: $($_.Exception.Message)"
         }
     }
 
@@ -301,10 +849,10 @@ function Show-EditConfigDialog($Owner) {
     $dialog.FormBorderStyle = "FixedDialog"
     $dialog.MaximizeBox = $false
     $dialog.MinimizeBox = $false
-    $dialog.ClientSize = New-Object System.Drawing.Size(420, 210)
+    $dialog.ClientSize = New-Object System.Drawing.Size(520, 210)
 
-    $labels = @("Key 1", "Key 2", "Key 3")
-    $keys = @("key1_text", "key2_text", "key3_text")
+    $labels = @("Key 1 text", "Key 2 URL", "Key 3 app")
+    $keys = @("key1_text", "key2_url", "key3_app")
     $boxes = @{}
 
     for ($i = 0; $i -lt 3; $i++) {
@@ -322,20 +870,30 @@ function Show-EditConfigDialog($Owner) {
         $boxes[$keys[$i]] = $box
     }
 
+    $browseButton = New-Object System.Windows.Forms.Button
+    $browseButton.Text = "Choose..."
+    $browseButton.Location = New-Object System.Drawing.Point(410, 103)
+    $browseButton.Size = New-Object System.Drawing.Size(92, 26)
+    $browseButton.Add_Click({
+        $selected = Show-AppPickerDialog $dialog $boxes["key3_app"].Text
+        if ($selected) { $boxes["key3_app"].Text = $selected }
+    })
+    $dialog.Controls.Add($browseButton)
+
     $cancelButton = New-Object System.Windows.Forms.Button
     $cancelButton.Text = "Cancel"
-    $cancelButton.Location = New-Object System.Drawing.Point(224, 162)
+    $cancelButton.Location = New-Object System.Drawing.Point(326, 162)
     $cancelButton.Size = New-Object System.Drawing.Size(82, 28)
     $cancelButton.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
     $dialog.Controls.Add($cancelButton)
 
     $saveButton = New-Object System.Windows.Forms.Button
     $saveButton.Text = "Save"
-    $saveButton.Location = New-Object System.Drawing.Point(318, 162)
+    $saveButton.Location = New-Object System.Drawing.Point(420, 162)
     $saveButton.Size = New-Object System.Drawing.Size(82, 28)
     $saveButton.Add_Click({
         $newConfig = New-DefaultConfig
-        foreach ($key in @("key1_text", "key2_text", "key3_text")) {
+        foreach ($key in @("key1_text", "key2_url", "key3_app")) {
             $newConfig[$key] = $boxes[$key].Text
         }
         Save-Config $newConfig
@@ -468,8 +1026,10 @@ function Start-Ui {
         $current = Read-Config
         Save-Config $current
         $key1Label.Text = "Key1: $($current["key1_text"])"
-        $key2Label.Text = "Key2: $($current["key2_text"])"
-        $key3Label.Text = "Key3: $($current["key3_text"])"
+        $key2Label.Text = "Key2 URL: $($current["key2_url"])"
+        $key3App = $current["key3_app"]
+        if (-not $key3App) { $key3App = "(not configured)" }
+        $key3Label.Text = "Key3 app: $key3App"
     }
 
     $refreshStatus = {
