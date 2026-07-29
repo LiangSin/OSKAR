@@ -8,7 +8,7 @@ The firmware sends the three macro keys through a vendor-defined custom HID inte
 - Key2 sends custom HID button `2`
 - Key3 sends custom HID button `3`
 
-The host daemon watches the custom HID reports and runs the configured action: Key1 pastes text, Key2 opens a URL in the default browser, and Key3 activates or launches an application. Because the macro keys are no longer standard keyboard keys, they should not collide with operating-system shortcuts.
+The host daemon watches the custom HID reports. Each key can independently paste text, open a URL in the default browser, or activate/launch an application. Because the macro keys are no longer standard keyboard keys, they should not collide with operating-system shortcuts.
 
 - Linux target machine: use `host-tools/linux/` with the system Python 3.
 - Windows target machine: use `host-tools/windows/` with built-in Windows PowerShell.
@@ -85,7 +85,7 @@ cd /path/to/host-tools/linux
 
 The GUI opens with the current config at the top. If the config file does not exist, the GUI creates it automatically.
 
-Use `Edit` to change Key1 text, the Key2 URL, or the Key3 application. Select `Choose...` to search installed desktop applications by name or launch command. 
+Use `Edit` to choose each key's action from its dropdown and configure the corresponding text, URL, or application. When `Open app` is selected, `Choose...` searches installed desktop applications by name or launch command.
 
 The daemon section shows whether the host daemon is running. Use `Refresh`, `Logs`, `Start Daemon`, and `Stop Daemon` from the GUI. When starting or installing the Linux daemon from the GUI, the tool imports the current desktop environment into the user service so clipboard helpers can find Wayland or X11.
 
@@ -128,7 +128,7 @@ powershell -ExecutionPolicy Bypass -File .\oskar-host.ps1 ui
 
 The GUI opens with the current config at the top. If the config file does not exist, the GUI creates it automatically.
 
-Use `Edit` to change Key1 text, the Key2 URL, or the Key3 application. Select `Choose...` to search a named list of installed Start Menu and Microsoft Store apps. The chooser also provides `Browse EXE...` for portable apps which are not registered with Windows.
+Use `Edit` to choose each key's action from its dropdown and configure the corresponding text, URL, or application. When `Open app` is selected, `Choose...` searches Start Menu and Microsoft Store apps; `Browse EXE...` remains available for portable apps.
 
 The daemon section shows whether the host daemon is running. Use `Refresh`, `Logs`, `Start Daemon`, and `Stop Daemon` from the GUI.
 
@@ -171,10 +171,21 @@ The daemon reloads the config every time a key is pressed, so changing config do
 The generated config contains:
 
 ```text
+key1_action=paste
 key1_text=OSKAR key 1
+key1_url=https://www.arm.com/
+key1_app=
+key2_action=url
+key2_text=OSKAR key 2
 key2_url=https://www.arm.com/
+key2_app=
+key3_action=app
+key3_text=OSKAR key 3
+key3_url=https://www.arm.com/
 key3_app=
 ```
+
+Each key retains all three values when its action changes, so switching away from an action and back does not discard its previous config. Existing config files without `keyN_action` keep the original default mapping: Key1 paste, Key2 URL, and Key3 app.
 
 ## Current Limitations
 

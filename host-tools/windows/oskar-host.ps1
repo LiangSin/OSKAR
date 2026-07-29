@@ -139,8 +139,17 @@ function ConvertFrom-EscapedValue([string]$Value) {
 
 function New-DefaultConfig {
     return [ordered]@{
+        key1_action = "paste"
         key1_text = "OSKAR key 1"
+        key1_url = "https://www.arm.com/"
+        key1_app = ""
+        key2_action = "url"
+        key2_text = "OSKAR key 2"
         key2_url = "https://www.arm.com/"
+        key2_app = ""
+        key3_action = "app"
+        key3_text = "OSKAR key 3"
+        key3_url = "https://www.arm.com/"
         key3_app = ""
     }
 }
@@ -163,6 +172,12 @@ function Read-Config {
             $config[$key] = ConvertFrom-EscapedValue $parts[1].Trim()
         }
     }
+    foreach ($number in 1..3) {
+        $actionKey = "key${number}_action"
+        if ($config[$actionKey] -notin @("paste", "url", "app")) {
+            $config[$actionKey] = (New-DefaultConfig)[$actionKey]
+        }
+    }
     return $config
 }
 
@@ -171,27 +186,52 @@ function Save-Config($Config) {
     $parent = Split-Path -Parent $path
     New-Item -ItemType Directory -Force -Path $parent | Out-Null
     $lines = @("# OSKAR host configuration")
-    foreach ($key in @("key1_text", "key2_url", "key3_app")) {
-        $value = ConvertTo-EscapedValue ($Config[$key])
-        $lines += "$key=$value"
+    foreach ($number in 1..3) {
+        foreach ($field in @("action", "text", "url", "app")) {
+            $key = "key${number}_$field"
+            $value = ConvertTo-EscapedValue ($Config[$key])
+            $lines += "$key=$value"
+        }
     }
     Set-Content -LiteralPath $path -Value $lines -Encoding UTF8
 }
 
 function Show-Config($Config) {
     Write-Host "config: $(Get-ConfigPath)"
-    Write-Host "key1 text = $($Config["key1_text"])"
-    Write-Host "key2 URL = $($Config["key2_url"])"
-    Write-Host "key3 app = $($Config["key3_app"])"
+    foreach ($number in 1..3) {
+        $button = "key$number"
+        $action = $Config["${button}_action"]
+        $valueKey = Get-ActionConfigKey $button $action
+        Write-Host "$button action = $action"
+        Write-Host "$button value = $($Config[$valueKey])"
+    }
 }
 
 function Resolve-Button([string]$Value) {
     switch ($Value.ToLowerInvariant()) {
-        { $_ -in @("1", "key1", "f13") } { return "key1_text" }
-        { $_ -in @("2", "key2", "f14") } { return "key2_url" }
-        { $_ -in @("3", "key3", "f15") } { return "key3_app" }
+        { $_ -in @("1", "key1", "f13") } { return "key1" }
+        { $_ -in @("2", "key2", "f14") } { return "key2" }
+        { $_ -in @("3", "key3", "f15") } { return "key3" }
         default { throw "button must be key1, key2, or key3" }
     }
+}
+
+function Get-ActionConfigKey([string]$ButtonName, [string]$Action) {
+    switch ($Action) {
+        "paste" { return "${ButtonName}_text" }
+        "url" { return "${ButtonName}_url" }
+        "app" { return "${ButtonName}_app" }
+        default { throw "unsupported action for ${ButtonName}: $Action" }
+    }
+}
+
+function Get-ActionDisplayName([string]$Action) {
+    $names = @{
+        paste = "Paste text"
+        url = "Open URL"
+        app = "Open app"
+    }
+    return $names[$Action]
 }
 
 function Paste-Text([string]$Value) {
@@ -584,6 +624,17 @@ function Open-App([string]$Value) {
     Start-Process -FilePath $path
 }
 
+function Invoke-KeyAction([string]$ButtonName, $Config) {
+    $action = $Config["${ButtonName}_action"]
+    $value = $Config[(Get-ActionConfigKey $ButtonName $action)]
+    switch ($action) {
+        "paste" { Paste-Text $value }
+        "url" { Open-Url $value }
+        "app" { Open-App $value }
+        default { throw "unsupported action for ${ButtonName}: $action" }
+    }
+}
+
 function Get-InstalledApplications {
     $applications = @{}
     $programFolders = @(
@@ -802,17 +853,17 @@ function Start-Daemon {
                 1 {
                     if (-not (Should-HandleHostKey "key1")) { return }
                     Write-Log "key1 pressed"
-                    Paste-Text ($config["key1_text"])
+                    Invoke-KeyAction "key1" $config
                 }
                 2 {
                     if (-not (Should-HandleHostKey "key2")) { return }
                     Write-Log "key2 pressed"
-                    Open-Url ($config["key2_url"])
+                    Invoke-KeyAction "key2" $config
                 }
                 3 {
                     if (-not (Should-HandleHostKey "key3")) { return }
                     Write-Log "key3 pressed"
-                    Open-App ($config["key3_app"])
+                    Invoke-KeyAction "key3" $config
                 }
             }
         } catch {
@@ -849,52 +900,131 @@ function Show-EditConfigDialog($Owner) {
     $dialog.FormBorderStyle = "FixedDialog"
     $dialog.MaximizeBox = $false
     $dialog.MinimizeBox = $false
-    $dialog.ClientSize = New-Object System.Drawing.Size(520, 210)
+    $dialog.ClientSize = New-Object System.Drawing.Size(620, 350)
 
-    $labels = @("Key 1 text", "Key 2 URL", "Key 3 app")
-    $keys = @("key1_text", "key2_url", "key3_app")
-    $boxes = @{}
+    $actionDisplay = [ordered]@{
+        paste = "Paste text"
+        url = "Open URL"
+        app = "Open app"
+    }
+    $displayToAction = @{}
+    $valueLabelDisplay = @{
+        paste = "Text"
+        url = "URL"
+        app = "Application"
+    }
+    foreach ($action in $actionDisplay.Keys) {
+        $displayToAction[$actionDisplay[$action]] = $action
+    }
+    $actionBoxes = @{}
+    $valueBoxes = @{}
+    $valueLabels = @{}
+    $chooseButtons = @{}
+    $selectedActions = @{}
+    $savedValues = @{}
 
-    for ($i = 0; $i -lt 3; $i++) {
-        $label = New-Object System.Windows.Forms.Label
-        $label.Text = $labels[$i]
-        $label.Location = New-Object System.Drawing.Point(16, (22 + ($i * 42)))
-        $label.Size = New-Object System.Drawing.Size(86, 22)
-        $dialog.Controls.Add($label)
-
-        $box = New-Object System.Windows.Forms.TextBox
-        $box.Location = New-Object System.Drawing.Point(112, (19 + ($i * 42)))
-        $box.Size = New-Object System.Drawing.Size(288, 24)
-        $box.Text = $config[$keys[$i]]
-        $dialog.Controls.Add($box)
-        $boxes[$keys[$i]] = $box
+    $refreshRow = {
+        param([string]$ButtonName)
+        $previousAction = $selectedActions[$ButtonName]
+        if ($previousAction) {
+            $savedValues[$ButtonName][$previousAction] = $valueBoxes[$ButtonName].Text
+        }
+        $action = $displayToAction[[string]$actionBoxes[$ButtonName].SelectedItem]
+        $selectedActions[$ButtonName] = $action
+        $valueLabels[$ButtonName].Text = $valueLabelDisplay[$action]
+        $valueBoxes[$ButtonName].Text = $savedValues[$ButtonName][$action]
+        $chooseButtons[$ButtonName].Visible = $action -eq "app"
     }
 
-    $browseButton = New-Object System.Windows.Forms.Button
-    $browseButton.Text = "Choose..."
-    $browseButton.Location = New-Object System.Drawing.Point(410, 103)
-    $browseButton.Size = New-Object System.Drawing.Size(92, 26)
-    $browseButton.Add_Click({
-        $selected = Show-AppPickerDialog $dialog $boxes["key3_app"].Text
-        if ($selected) { $boxes["key3_app"].Text = $selected }
-    })
-    $dialog.Controls.Add($browseButton)
+    foreach ($number in 1..3) {
+        $buttonName = "key$number"
+        $group = New-Object System.Windows.Forms.GroupBox
+        $group.Text = "Key $number"
+        $group.Location = New-Object System.Drawing.Point(16, (12 + (($number - 1) * 92)))
+        $group.Size = New-Object System.Drawing.Size(588, 84)
+        $dialog.Controls.Add($group)
+
+        $actionLabel = New-Object System.Windows.Forms.Label
+        $actionLabel.Text = "Action"
+        $actionLabel.Location = New-Object System.Drawing.Point(14, 24)
+        $actionLabel.Size = New-Object System.Drawing.Size(58, 20)
+        $group.Controls.Add($actionLabel)
+
+        $actionBox = New-Object System.Windows.Forms.ComboBox
+        $actionBox.Location = New-Object System.Drawing.Point(82, 20)
+        $actionBox.Size = New-Object System.Drawing.Size(170, 24)
+        $actionBox.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
+        foreach ($displayName in $actionDisplay.Values) {
+            [void]$actionBox.Items.Add([string]$displayName)
+        }
+        $actionBox.SelectedItem = $actionDisplay[$config["${buttonName}_action"]]
+        $actionBox.Tag = $buttonName
+        $group.Controls.Add($actionBox)
+        $actionBoxes[$buttonName] = $actionBox
+
+        $valueLabel = New-Object System.Windows.Forms.Label
+        $valueLabel.Location = New-Object System.Drawing.Point(14, 56)
+        $valueLabel.Size = New-Object System.Drawing.Size(62, 20)
+        $group.Controls.Add($valueLabel)
+        $valueLabels[$buttonName] = $valueLabel
+
+        $valueBox = New-Object System.Windows.Forms.TextBox
+        $valueBox.Location = New-Object System.Drawing.Point(82, 53)
+        $valueBox.Size = New-Object System.Drawing.Size(390, 24)
+        $group.Controls.Add($valueBox)
+        $valueBoxes[$buttonName] = $valueBox
+
+        $chooseButton = New-Object System.Windows.Forms.Button
+        $chooseButton.Text = "Choose..."
+        $chooseButton.Location = New-Object System.Drawing.Point(482, 51)
+        $chooseButton.Size = New-Object System.Drawing.Size(88, 26)
+        $chooseButton.Tag = $buttonName
+        $chooseButton.Add_Click({
+            param($sender, $_eventArgs)
+            $name = [string]$sender.Tag
+            $selected = Show-AppPickerDialog $dialog $valueBoxes[$name].Text
+            if ($selected) {
+                $savedValues[$name]["app"] = $selected
+                $valueBoxes[$name].Text = $selected
+            }
+        })
+        $group.Controls.Add($chooseButton)
+        $chooseButtons[$buttonName] = $chooseButton
+
+        $savedValues[$buttonName] = @{
+            paste = $config["${buttonName}_text"]
+            url = $config["${buttonName}_url"]
+            app = $config["${buttonName}_app"]
+        }
+        $selectedActions[$buttonName] = $null
+        $actionBox.Add_SelectedIndexChanged({
+            param($sender, $_eventArgs)
+            & $refreshRow ([string]$sender.Tag)
+        })
+        & $refreshRow $buttonName
+    }
 
     $cancelButton = New-Object System.Windows.Forms.Button
     $cancelButton.Text = "Cancel"
-    $cancelButton.Location = New-Object System.Drawing.Point(326, 162)
+    $cancelButton.Location = New-Object System.Drawing.Point(428, 310)
     $cancelButton.Size = New-Object System.Drawing.Size(82, 28)
     $cancelButton.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
     $dialog.Controls.Add($cancelButton)
 
     $saveButton = New-Object System.Windows.Forms.Button
     $saveButton.Text = "Save"
-    $saveButton.Location = New-Object System.Drawing.Point(420, 162)
+    $saveButton.Location = New-Object System.Drawing.Point(522, 310)
     $saveButton.Size = New-Object System.Drawing.Size(82, 28)
     $saveButton.Add_Click({
         $newConfig = New-DefaultConfig
-        foreach ($key in @("key1_text", "key2_url", "key3_app")) {
-            $newConfig[$key] = $boxes[$key].Text
+        foreach ($number in 1..3) {
+            $buttonName = "key$number"
+            $action = $selectedActions[$buttonName]
+            $savedValues[$buttonName][$action] = $valueBoxes[$buttonName].Text
+            $newConfig["${buttonName}_action"] = $action
+            $newConfig["${buttonName}_text"] = $savedValues[$buttonName]["paste"]
+            $newConfig["${buttonName}_url"] = $savedValues[$buttonName]["url"]
+            $newConfig["${buttonName}_app"] = $savedValues[$buttonName]["app"]
         }
         Save-Config $newConfig
         $dialog.DialogResult = [System.Windows.Forms.DialogResult]::OK
@@ -930,30 +1060,59 @@ function Start-Ui {
 
     $configPathLabel = New-Object System.Windows.Forms.Label
     $configPathLabel.Location = New-Object System.Drawing.Point(16, 24)
-    $configPathLabel.Size = New-Object System.Drawing.Size(454, 18)
+    $configPathLabel.Size = New-Object System.Drawing.Size(360, 18)
     $configPathLabel.Text = "Config: $(Get-ConfigPath)"
     $configGroup.Controls.Add($configPathLabel)
 
-    $key1Label = New-Object System.Windows.Forms.Label
-    $key1Label.Location = New-Object System.Drawing.Point(16, 52)
-    $key1Label.Size = New-Object System.Drawing.Size(454, 18)
-    $configGroup.Controls.Add($key1Label)
-
-    $key2Label = New-Object System.Windows.Forms.Label
-    $key2Label.Location = New-Object System.Drawing.Point(16, 76)
-    $key2Label.Size = New-Object System.Drawing.Size(454, 18)
-    $configGroup.Controls.Add($key2Label)
-
-    $key3Label = New-Object System.Windows.Forms.Label
-    $key3Label.Location = New-Object System.Drawing.Point(16, 100)
-    $key3Label.Size = New-Object System.Drawing.Size(340, 18)
-    $configGroup.Controls.Add($key3Label)
-
     $editButton = New-Object System.Windows.Forms.Button
     $editButton.Text = "Edit"
-    $editButton.Location = New-Object System.Drawing.Point(392, 98)
+    $editButton.Location = New-Object System.Drawing.Point(392, 20)
     $editButton.Size = New-Object System.Drawing.Size(78, 28)
     $configGroup.Controls.Add($editButton)
+
+    $keyPreviewGroups = @()
+    $keyActionLabels = @()
+    $keyValueBoxes = @()
+    $previewCaptionFont = New-Object System.Drawing.Font($form.Font, [System.Drawing.FontStyle]::Bold)
+    foreach ($number in 1..3) {
+        $keyGroup = New-Object System.Windows.Forms.GroupBox
+        $keyGroup.Text = "Key $number"
+        $keyGroup.Location = New-Object System.Drawing.Point(16, (52 + (($number - 1) * 82)))
+        $keyGroup.Size = New-Object System.Drawing.Size(454, 74)
+        $configGroup.Controls.Add($keyGroup)
+        $keyPreviewGroups += $keyGroup
+
+        $actionCaption = New-Object System.Windows.Forms.Label
+        $actionCaption.Text = "Action"
+        $actionCaption.Font = $previewCaptionFont
+        $actionCaption.Location = New-Object System.Drawing.Point(12, 22)
+        $actionCaption.Size = New-Object System.Drawing.Size(62, 18)
+        $keyGroup.Controls.Add($actionCaption)
+
+        $actionValue = New-Object System.Windows.Forms.Label
+        $actionValue.Location = New-Object System.Drawing.Point(84, 22)
+        $actionValue.Size = New-Object System.Drawing.Size(352, 18)
+        $keyGroup.Controls.Add($actionValue)
+        $keyActionLabels += $actionValue
+
+        $configCaption = New-Object System.Windows.Forms.Label
+        $configCaption.Text = "Config"
+        $configCaption.Font = $previewCaptionFont
+        $configCaption.Location = New-Object System.Drawing.Point(12, 49)
+        $configCaption.Size = New-Object System.Drawing.Size(62, 18)
+        $keyGroup.Controls.Add($configCaption)
+
+        $configValue = New-Object System.Windows.Forms.TextBox
+        $configValue.Location = New-Object System.Drawing.Point(84, 46)
+        $configValue.Size = New-Object System.Drawing.Size(352, 44)
+        $configValue.Multiline = $true
+        $configValue.ReadOnly = $true
+        $configValue.WordWrap = $true
+        $configValue.ScrollBars = [System.Windows.Forms.ScrollBars]::Vertical
+        $configValue.BackColor = [System.Drawing.SystemColors]::Window
+        $keyGroup.Controls.Add($configValue)
+        $keyValueBoxes += $configValue
+    }
 
     $daemonGroup = New-Object System.Windows.Forms.GroupBox
     $daemonGroup.Text = "Daemon status"
@@ -1036,17 +1195,19 @@ function Start-Ui {
     }
 
     $updateWindowLayout = {
-        $labelWidth = 454
-        $y = 24
-        foreach ($label in @($configPathLabel, $key1Label, $key2Label, $key3Label)) {
-            $height = & $measureConfigLabel $label $labelWidth
-            $label.Location = New-Object System.Drawing.Point(16, $y)
-            $label.Size = New-Object System.Drawing.Size($labelWidth, $height)
-            $y += $height + 8
-        }
+        $pathHeight = & $measureConfigLabel $configPathLabel 360
+        $configPathLabel.Location = New-Object System.Drawing.Point(16, 24)
+        $configPathLabel.Size = New-Object System.Drawing.Size(360, $pathHeight)
+        $editButton.Location = New-Object System.Drawing.Point(392, 20)
 
-        $editButton.Location = New-Object System.Drawing.Point(392, ($y + 2))
-        $configGroup.Height = $editButton.Bottom + 12
+        $y = [Math]::Max($configPathLabel.Bottom, $editButton.Bottom) + 10
+        for ($index = 0; $index -lt 3; $index++) {
+            $group = $keyPreviewGroups[$index]
+            $group.Location = New-Object System.Drawing.Point(16, $y)
+            $group.Size = New-Object System.Drawing.Size(454, 102)
+            $y = $group.Bottom + 8
+        }
+        $configGroup.Height = $y + 4
 
         $daemonGroup.Location = New-Object System.Drawing.Point(16, ($configGroup.Bottom + 14))
         $advancedToggle.Location = New-Object System.Drawing.Point(16, ($daemonGroup.Bottom + 18))
@@ -1064,11 +1225,17 @@ function Start-Ui {
     $refreshConfig = {
         $current = Read-Config
         Save-Config $current
-        $key1Label.Text = "Key1: $($current["key1_text"])"
-        $key2Label.Text = "Key2 URL: $($current["key2_url"])"
-        $key3App = $current["key3_app"]
-        if (-not $key3App) { $key3App = "(not configured)" }
-        $key3Label.Text = "Key3 app: $key3App"
+        foreach ($number in 1..3) {
+            $buttonName = "key$number"
+            $action = $current["${buttonName}_action"]
+            $value = $current[(Get-ActionConfigKey $buttonName $action)]
+            if (-not $value) { $value = "(not configured)" }
+            $keyActionLabels[$number - 1].Text = Get-ActionDisplayName $action
+            $keyValueBoxes[$number - 1].Text = $value
+            $keyValueBoxes[$number - 1].SelectionStart = 0
+            $keyValueBoxes[$number - 1].SelectionLength = 0
+            $keyValueBoxes[$number - 1].ScrollToCaret()
+        }
         & $updateWindowLayout
     }
 
@@ -1272,7 +1439,8 @@ switch ($Command) {
             throw "usage: .\oskar-host.ps1 set key1 `"text`""
         }
         $config = Read-Config
-        $key = Resolve-Button $Button
+        $buttonName = Resolve-Button $Button
+        $key = Get-ActionConfigKey $buttonName $config["${buttonName}_action"]
         $config[$key] = $Text
         Save-Config $config
         Show-Config $config

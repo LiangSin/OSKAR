@@ -9,9 +9,9 @@ This document records the behavior implemented on top of the base OSKAR firmware
 | Encoder clockwise | Implemented | Move forward through the operating system window switcher. |
 | Encoder counter-clockwise | Implemented | Move backward through the operating system window switcher. |
 | Encoder button | Implemented | Toggle window maximize/minimize. |
-| Key1 | Implemented | Sends OSKAR custom HID button `1`; the host pastes configured text. |
-| Key2 | Implemented | Sends OSKAR custom HID button `2`; the host opens the configured URL. |
-| Key3 | Implemented | Sends OSKAR custom HID button `3`; the host activates or launches the configured app. |
+| Key1 | Implemented | Sends OSKAR custom HID button `1`; its host action is configurable. |
+| Key2 | Implemented | Sends OSKAR custom HID button `2`; its host action is configurable. |
+| Key3 | Implemented | Sends OSKAR custom HID button `3`; its host action is configurable. |
 
 ## HID Action Model
 
@@ -104,11 +104,7 @@ The first supported target runtimes are:
 
 ### Host Config
 
-The daemon config is independent for each key:
-
-- `key1_text`: text pasted when custom HID button `1` is received.
-- `key2_url`: URL opened in the default browser when custom HID button `2` is received. The default is `https://www.arm.com/`.
-- `key3_app`: application selected in the host GUI and activated or launched when custom HID button `3` is received. It has no default.
+The daemon config is independent for each key. Every `keyN` stores an `action` (`paste`, `url`, or `app`) plus separate `text`, `url`, and `app` values. The GUI only shows the value for the selected action, while retaining the other two values for later use.
 
 Config locations:
 
@@ -119,9 +115,7 @@ The daemon reloads config on every key press, so changing config does not requir
 
 ### Host Actions
 
-- Key1 pastes `key1_text`.
-- Key2 asks the operating system to open `key2_url` in the default browser.
-- Key3 focuses an existing window for `key3_app` where the operating system permits it, otherwise launches the selected application. 
+All three keys can paste their configured text, open their configured URL, or focus/launch their configured application. Existing config files retain the original defaults: Key1 paste, Key2 URL, and Key3 app.
 
 ### Registration Model
 

@@ -28,11 +28,26 @@ OSKAR_CUSTOM_HID_REPORT_DESCRIPTOR = bytes(
 OSKAR_CUSTOM_HID_REPORT_SIZE = 2
 
 DEFAULTS = {
+    "key1_action": "paste",
     "key1_text": "OSKAR key 1",
+    "key1_url": "https://www.arm.com/",
+    "key1_app": "",
+    "key2_action": "url",
+    "key2_text": "OSKAR key 2",
     "key2_url": "https://www.arm.com/",
+    "key2_app": "",
+    "key3_action": "app",
+    "key3_text": "OSKAR key 3",
+    "key3_url": "https://www.arm.com/",
     "key3_app": "",
 }
-CONFIG_KEYS = ("key1_text", "key2_url", "key3_app")
+ACTIONS = ("paste", "url", "app")
+ACTION_LABELS = {"paste": "Paste text", "url": "Open URL", "app": "Open app"}
+CONFIG_KEYS = tuple(
+    f"key{number}_{field}"
+    for number in range(1, 4)
+    for field in ("action", "text", "url", "app")
+)
 APP_WINDOW_CACHE = {}
 
 SERVICE_NAME = "oskar-host.service"
@@ -222,6 +237,10 @@ def load_config():
         key = key.strip()
         if key in config:
             config[key] = unescape_value(value.strip())
+    for number in range(1, 4):
+        action_key = f"key{number}_action"
+        if config[action_key] not in ACTIONS:
+            config[action_key] = DEFAULTS[action_key]
     return config
 
 
@@ -236,9 +255,11 @@ def save_config(config):
 
 def print_config(config):
     print(f"config: {config_path()}")
-    print(f"key1 text = {config['key1_text']!r}")
-    print(f"key2 URL = {config['key2_url']!r}")
-    print(f"key3 app = {config['key3_app']!r}")
+    for number in range(1, 4):
+        button = f"key{number}"
+        action = config[f"{button}_action"]
+        print(f"{button} action = {action!r}")
+        print(f"{button} value = {config[action_config_key(button, action)]!r}")
 
 
 def prefer_wayland():
@@ -487,20 +508,25 @@ def open_app(value, dry_run):
 
 
 def perform_button_action(button, config, dry_run):
-    if button == "key1":
-        paste_text(config["key1_text"], dry_run)
-    elif button == "key2":
-        open_url(config["key2_url"], dry_run)
-    elif button == "key3":
-        open_app(config["key3_app"], dry_run)
+    action = config[f"{button}_action"]
+    value = config[action_config_key(button, action)]
+    if action == "paste":
+        paste_text(value, dry_run)
+    elif action == "url":
+        open_url(value, dry_run)
+    elif action == "app":
+        open_app(value, dry_run)
+    else:
+        raise RuntimeError(f"unsupported action for {button}: {action}")
 
 
-def button_to_config_key(button):
-    return {
-        "key1": "key1_text",
-        "key2": "key2_url",
-        "key3": "key3_app",
-    }[button]
+def action_config_key(button, action):
+    suffix = {"paste": "text", "url": "url", "app": "app"}[action]
+    return f"{button}_{suffix}"
+
+
+def button_to_config_key(button, config):
+    return action_config_key(button, config[f"{button}_action"])
 
 
 def parse_button(value):
@@ -588,7 +614,7 @@ def command_set(args):
     button = parse_button(args.button)
     if not button:
         raise RuntimeError("button must be key1, key2, or key3")
-    config[button_to_config_key(button)] = args.text
+    config[button_to_config_key(button, config)] = args.text
     save_config(config)
     print_config(config)
 
@@ -766,40 +792,78 @@ def show_edit_config_dialog(parent, on_saved):
 
     frame = ttk.Frame(dialog, padding=14)
     frame.grid(row=0, column=0, sticky="nsew")
+    frame.columnconfigure(0, weight=1)
 
-    fields = {}
-    rows = [
-        ("Key 1 text", "key1_text"),
-        ("Key 2 URL", "key2_url"),
-        ("Key 3 app", "key3_app"),
-    ]
-    for index, (label_text, key) in enumerate(rows):
-        ttk.Label(frame, text=label_text).grid(row=index, column=0, sticky="w", pady=6)
-        entry = ttk.Entry(frame, width=42)
-        entry.insert(0, config[key])
-        entry.grid(row=index, column=1, sticky="ew", padx=(12, 0), pady=6)
-        fields[key] = entry
+    action_vars = {}
+    value_vars = {}
+    entries = {}
+    config_labels = {}
+    browse_buttons = {}
+    label_to_action = {label: action for action, label in ACTION_LABELS.items()}
 
-    def browse_app():
-        selected = show_app_picker_dialog(dialog, fields["key3_app"].get())
+    def refresh_row(number):
+        button = f"key{number}"
+        action = label_to_action[action_vars[button].get()]
+        entries[button].configure(textvariable=value_vars[button][action])
+        config_labels[button].configure(
+            text={"paste": "Text", "url": "URL", "app": "Application"}[action]
+        )
+        if action == "app":
+            browse_buttons[button].grid()
+        else:
+            browse_buttons[button].grid_remove()
+
+    def browse_app(number):
+        button = f"key{number}"
+        selected = show_app_picker_dialog(dialog, value_vars[button]["app"].get())
         if selected:
-            fields["key3_app"].delete(0, "end")
-            fields["key3_app"].insert(0, selected)
+            value_vars[button]["app"].set(selected)
 
-    ttk.Button(frame, text="Choose...", command=browse_app).grid(
-        row=2, column=2, sticky="w", padx=(8, 0), pady=6
-    )
+    for number in range(1, 4):
+        button = f"key{number}"
+        group = ttk.LabelFrame(frame, text=f"Key {number}", padding=10)
+        group.grid(row=number - 1, column=0, sticky="ew", pady=(0, 10))
+        group.columnconfigure(1, weight=1)
+
+        ttk.Label(group, text="Action").grid(row=0, column=0, sticky="w", padx=(0, 10))
+        action_vars[button] = tk.StringVar(value=ACTION_LABELS[config[f"{button}_action"]])
+        action_box = ttk.Combobox(
+            group,
+            textvariable=action_vars[button],
+            values=tuple(ACTION_LABELS.values()),
+            state="readonly",
+            width=18,
+        )
+        action_box.grid(row=0, column=1, sticky="w")
+
+        value_vars[button] = {
+            action: tk.StringVar(value=config[f"{button}_{suffix}"])
+            for action, suffix in (("paste", "text"), ("url", "url"), ("app", "app"))
+        }
+        config_labels[button] = ttk.Label(group)
+        config_labels[button].grid(row=1, column=0, sticky="w", padx=(0, 10), pady=(8, 0))
+        entries[button] = ttk.Entry(group, width=52)
+        entries[button].grid(row=1, column=1, sticky="ew", pady=(8, 0))
+        browse_buttons[button] = ttk.Button(
+            group, text="Choose...", command=lambda n=number: browse_app(n)
+        )
+        browse_buttons[button].grid(row=1, column=2, padx=(8, 0), pady=(8, 0))
+        action_box.bind("<<ComboboxSelected>>", lambda _event, n=number: refresh_row(n))
+        refresh_row(number)
 
     buttons = ttk.Frame(frame)
-    buttons.grid(row=3, column=0, columnspan=2, sticky="e", pady=(14, 0))
+    buttons.grid(row=3, column=0, sticky="e", pady=(4, 0))
 
     def cancel():
         dialog.destroy()
 
     def save():
         new_config = dict(DEFAULTS)
-        for key, entry in fields.items():
-            new_config[key] = entry.get()
+        for number in range(1, 4):
+            button = f"key{number}"
+            new_config[f"{button}_action"] = label_to_action[action_vars[button].get()]
+            for action, suffix in (("paste", "text"), ("url", "url"), ("app", "app")):
+                new_config[f"{button}_{suffix}"] = value_vars[button][action].get()
         save_config(new_config)
         on_saved()
         dialog.destroy()
@@ -809,13 +873,14 @@ def show_edit_config_dialog(parent, on_saved):
 
     dialog.bind("<Escape>", lambda _event: cancel())
     dialog.bind("<Return>", lambda _event: save())
-    fields["key1_text"].focus_set()
+    entries["key1"].focus_set()
     parent.wait_window(dialog)
 
 
 def command_ui(_args):
     try:
         import tkinter as tk
+        from tkinter import font as tkfont
         from tkinter import messagebox, ttk
     except ImportError as error:
         raise RuntimeError("install python3-tk to use the Linux GUI") from error
@@ -838,26 +903,54 @@ def command_ui(_args):
     config_frame.columnconfigure(0, weight=1)
 
     config_path_var = tk.StringVar(value=f"Config: {config_path()}")
-    key1_var = tk.StringVar()
-    key2_var = tk.StringVar()
-    key3_var = tk.StringVar()
-    config_labels = [
-        ttk.Label(config_frame, textvariable=config_path_var, wraplength=440, justify="left"),
-        ttk.Label(config_frame, textvariable=key1_var, wraplength=440, justify="left"),
-        ttk.Label(config_frame, textvariable=key2_var, wraplength=440, justify="left"),
-        ttk.Label(config_frame, textvariable=key3_var, wraplength=440, justify="left"),
-    ]
-    config_labels[0].grid(row=0, column=0, columnspan=2, sticky="ew")
-    config_labels[1].grid(row=1, column=0, columnspan=2, sticky="ew", pady=(10, 0))
-    config_labels[2].grid(row=2, column=0, columnspan=2, sticky="ew", pady=(6, 0))
-    config_labels[3].grid(row=3, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+    config_path_label = ttk.Label(
+        config_frame, textvariable=config_path_var, wraplength=350, justify="left"
+    )
+    config_path_label.grid(row=0, column=0, sticky="ew")
     edit_button = ttk.Button(config_frame, text="Edit")
-    edit_button.grid(row=4, column=1, sticky="e", pady=(10, 0))
+    edit_button.grid(row=0, column=1, sticky="ne", padx=(12, 0))
+
+    bold_font = tkfont.nametofont("TkDefaultFont").copy()
+    bold_font.configure(weight="bold")
+    preview_action_vars = []
+    preview_value_texts = []
+    for number in range(1, 4):
+        group = ttk.LabelFrame(config_frame, text=f"Key {number}", padding=10)
+        group.grid(row=number, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        group.columnconfigure(1, weight=1)
+
+        action_var = tk.StringVar()
+        preview_action_vars.append(action_var)
+
+        ttk.Label(group, text="Action", font=bold_font).grid(row=0, column=0, sticky="nw")
+        ttk.Label(group, textvariable=action_var).grid(
+            row=0, column=1, sticky="nw", padx=(14, 0)
+        )
+        ttk.Label(group, text="Config", font=bold_font).grid(
+            row=1, column=0, sticky="nw", pady=(7, 0)
+        )
+        value_frame = ttk.Frame(group)
+        value_frame.grid(row=1, column=1, sticky="ew", padx=(14, 0), pady=(7, 0))
+        value_frame.columnconfigure(0, weight=1)
+        value_text = tk.Text(
+            value_frame,
+            height=3,
+            wrap="word",
+            relief="solid",
+            borderwidth=1,
+            padx=5,
+            pady=4,
+        )
+        value_text.grid(row=0, column=0, sticky="ew")
+        value_scrollbar = ttk.Scrollbar(
+            value_frame, orient="vertical", command=value_text.yview
+        )
+        value_scrollbar.grid(row=0, column=1, sticky="ns")
+        value_text.configure(yscrollcommand=value_scrollbar.set, state="disabled")
+        preview_value_texts.append(value_text)
 
     def resize_config_labels(event):
-        wrap_length = max(280, event.width - 28)
-        for label in config_labels:
-            label.configure(wraplength=wrap_length)
+        config_path_label.configure(wraplength=max(220, event.width - 120))
 
     config_frame.bind("<Configure>", resize_config_labels)
 
@@ -895,9 +988,17 @@ def command_ui(_args):
     def refresh_config():
         current = load_config()
         save_config(current)
-        key1_var.set(f"Key1: {current['key1_text']}")
-        key2_var.set(f"Key2 URL: {current['key2_url']}")
-        key3_var.set(f"Key3 app: {current['key3_app'] or '(not configured)'}")
+        for number in range(1, 4):
+            button = f"key{number}"
+            action = current[f"{button}_action"]
+            value = current[action_config_key(button, action)] or "(not configured)"
+            preview_action_vars[number - 1].set(ACTION_LABELS[action])
+            value_text = preview_value_texts[number - 1]
+            value_text.configure(state="normal")
+            value_text.delete("1.0", "end")
+            value_text.insert("1.0", value)
+            value_text.yview_moveto(0)
+            value_text.configure(state="disabled")
 
     def refresh_status():
         status_text.configure(state="normal")
