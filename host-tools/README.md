@@ -89,6 +89,8 @@ Use `Edit` to choose each key's action from its dropdown and configure the corre
 
 The daemon section shows whether the host daemon is running. Use `Refresh`, `Logs`, `Start Daemon`, and `Stop Daemon` from the GUI. When starting or installing the Linux daemon from the GUI, the tool imports the current desktop environment into the user service so clipboard helpers can find Wayland or X11.
 
+The log keeps the newest 100 lines. Each new log entry discards the oldest lines beyond that limit.
+
 Open `Advanced` to install or uninstall the logon registration. Install creates and starts a `systemd --user` service.
 
 Optional command-line diagnostics are still available:
@@ -131,6 +133,8 @@ The GUI opens with the current config at the top. If the config file does not ex
 Use `Edit` to choose each key's action from its dropdown and configure the corresponding text, URL, or application. When `Open app` is selected, `Choose...` searches Start Menu and Microsoft Store apps; `Browse EXE...` remains available for portable apps.
 
 The daemon section shows whether the host daemon is running. Use `Refresh`, `Logs`, `Start Daemon`, and `Stop Daemon` from the GUI.
+
+The log keeps the newest 100 lines. Each new log entry discards the oldest lines beyond that limit.
 
 Open `Advanced` to install or uninstall the logon registration. Install first tries to create a limited, current-user Scheduled Task. If Windows policy denies that, it falls back to the current user's `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` startup key. After registering startup, it also tries to start the daemon immediately.
 

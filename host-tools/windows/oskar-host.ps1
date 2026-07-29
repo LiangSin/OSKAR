@@ -17,6 +17,7 @@ $ErrorActionPreference = "Stop"
 $StartupName = "OSKAR Host Daemon"
 $RunKeyPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
 $HostKeyDebounceMs = 150
+$LogMaxLines = 100
 $LastHostKeyPress = @{}
 $AppWindowCache = @{}
 
@@ -50,7 +51,13 @@ function Get-LogPath {
 function Write-Log([string]$Message) {
     Ensure-StateDir
     $stamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    Add-Content -LiteralPath (Get-LogPath) -Encoding UTF8 -Value "[$stamp] $Message"
+    $logPath = Get-LogPath
+    $lines = @()
+    if (Test-Path -LiteralPath $logPath) {
+        $lines = @(Get-Content -LiteralPath $logPath -ErrorAction SilentlyContinue)
+    }
+    $lines += @("[$stamp] $Message" -split "`r?`n")
+    Set-Content -LiteralPath $logPath -Encoding UTF8 -Value @($lines | Select-Object -Last $LogMaxLines)
 }
 
 function Get-DaemonProcess {

@@ -11,6 +11,7 @@ import sys
 import time
 
 HOST_KEY_DEBOUNCE_SECONDS = 0.15
+LOG_MAX_LINES = 100
 OSKAR_CUSTOM_HID_REPORT_DESCRIPTOR = bytes(
     [
         0x06, 0x00, 0xFF,
@@ -95,8 +96,18 @@ def ensure_state_dir():
 def write_log(message):
     ensure_state_dir()
     stamp = time.strftime("%Y-%m-%d %H:%M:%S")
-    with log_path().open("a", encoding="utf-8") as handle:
-        handle.write(f"[{stamp}] {message}\n")
+    path = log_path()
+    try:
+        handle = path.open("r+", encoding="utf-8", errors="replace")
+    except FileNotFoundError:
+        handle = path.open("w+", encoding="utf-8")
+
+    with handle:
+        lines = handle.read().splitlines()
+        lines.extend(f"[{stamp}] {message}".splitlines())
+        handle.seek(0)
+        handle.write("\n".join(lines[-LOG_MAX_LINES:]) + "\n")
+        handle.truncate()
 
 
 def read_pid():
@@ -1106,14 +1117,13 @@ def start_daemon_process():
         return
 
     ensure_state_dir()
-    with log_path().open("ab") as log_file:
-        subprocess.Popen(
-            [sys.executable, str(pathlib.Path(__file__).resolve()), "daemon"],
-            stdin=subprocess.DEVNULL,
-            stdout=log_file,
-            stderr=log_file,
-            start_new_session=True,
-        )
+    subprocess.Popen(
+        [sys.executable, str(pathlib.Path(__file__).resolve()), "daemon"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
 
     for _ in range(10):
         time.sleep(0.5)
@@ -1224,6 +1234,9 @@ def command_daemon(args):
             except Exception as error:
                 write_log(f"{button} action failed: {error}")
                 print(f"{button} action failed: {error}", file=sys.stderr, flush=True)
+    except Exception as error:
+        write_log(f"daemon failed: {error}")
+        raise
     finally:
         if not args.stdin and read_pid() == os.getpid():
             try:
