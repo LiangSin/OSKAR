@@ -841,12 +841,25 @@ def command_ui(_args):
     key1_var = tk.StringVar()
     key2_var = tk.StringVar()
     key3_var = tk.StringVar()
-    ttk.Label(config_frame, textvariable=config_path_var).grid(row=0, column=0, columnspan=2, sticky="w")
-    ttk.Label(config_frame, textvariable=key1_var).grid(row=1, column=0, columnspan=2, sticky="w", pady=(10, 0))
-    ttk.Label(config_frame, textvariable=key2_var).grid(row=2, column=0, columnspan=2, sticky="w", pady=(6, 0))
-    ttk.Label(config_frame, textvariable=key3_var).grid(row=3, column=0, sticky="w", pady=(6, 0))
+    config_labels = [
+        ttk.Label(config_frame, textvariable=config_path_var, wraplength=440, justify="left"),
+        ttk.Label(config_frame, textvariable=key1_var, wraplength=440, justify="left"),
+        ttk.Label(config_frame, textvariable=key2_var, wraplength=440, justify="left"),
+        ttk.Label(config_frame, textvariable=key3_var, wraplength=440, justify="left"),
+    ]
+    config_labels[0].grid(row=0, column=0, columnspan=2, sticky="ew")
+    config_labels[1].grid(row=1, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+    config_labels[2].grid(row=2, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+    config_labels[3].grid(row=3, column=0, columnspan=2, sticky="ew", pady=(6, 0))
     edit_button = ttk.Button(config_frame, text="Edit")
-    edit_button.grid(row=3, column=1, sticky="e", padx=(12, 0))
+    edit_button.grid(row=4, column=1, sticky="e", pady=(10, 0))
+
+    def resize_config_labels(event):
+        wrap_length = max(280, event.width - 28)
+        for label in config_labels:
+            label.configure(wraplength=wrap_length)
+
+    config_frame.bind("<Configure>", resize_config_labels)
 
     daemon_frame = ttk.LabelFrame(outer, text="Daemon status", padding=12)
     daemon_frame.grid(row=1, column=0, sticky="ew", pady=(14, 0))

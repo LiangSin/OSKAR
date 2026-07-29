@@ -920,6 +920,7 @@ function Start-Ui {
     $form.StartPosition = "CenterScreen"
     $form.MinimumSize = New-Object System.Drawing.Size(520, 410)
     $form.ClientSize = New-Object System.Drawing.Size(520, 470)
+    $form.AutoScroll = $true
 
     $configGroup = New-Object System.Windows.Forms.GroupBox
     $configGroup.Text = "Current config"
@@ -1022,6 +1023,44 @@ function Start-Ui {
     $uninstallButton.Size = New-Object System.Drawing.Size(86, 28)
     $advancedPanel.Controls.Add($uninstallButton)
 
+    $measureConfigLabel = {
+        param($Label, [int]$Width)
+        $flags = ([System.Windows.Forms.TextFormatFlags]::WordBreak) -bor ([System.Windows.Forms.TextFormatFlags]::NoPrefix)
+        $measured = [System.Windows.Forms.TextRenderer]::MeasureText(
+            $Label.Text,
+            $Label.Font,
+            (New-Object System.Drawing.Size($Width, 0)),
+            $flags
+        )
+        return [Math]::Max(18, $measured.Height)
+    }
+
+    $updateWindowLayout = {
+        $labelWidth = 454
+        $y = 24
+        foreach ($label in @($configPathLabel, $key1Label, $key2Label, $key3Label)) {
+            $height = & $measureConfigLabel $label $labelWidth
+            $label.Location = New-Object System.Drawing.Point(16, $y)
+            $label.Size = New-Object System.Drawing.Size($labelWidth, $height)
+            $y += $height + 8
+        }
+
+        $editButton.Location = New-Object System.Drawing.Point(392, ($y + 2))
+        $configGroup.Height = $editButton.Bottom + 12
+
+        $daemonGroup.Location = New-Object System.Drawing.Point(16, ($configGroup.Bottom + 14))
+        $advancedToggle.Location = New-Object System.Drawing.Point(16, ($daemonGroup.Bottom + 18))
+        $advancedPanel.Location = New-Object System.Drawing.Point(16, ($advancedToggle.Bottom + 8))
+
+        $contentHeight = if ($advancedPanel.Visible) {
+            $advancedPanel.Bottom + 18
+        } else {
+            $advancedToggle.Bottom + 16
+        }
+        $maximumHeight = [System.Windows.Forms.Screen]::FromControl($form).WorkingArea.Height - 80
+        $form.ClientSize = New-Object System.Drawing.Size(520, ([Math]::Min($contentHeight, $maximumHeight)))
+    }
+
     $refreshConfig = {
         $current = Read-Config
         Save-Config $current
@@ -1030,6 +1069,7 @@ function Start-Ui {
         $key3App = $current["key3_app"]
         if (-not $key3App) { $key3App = "(not configured)" }
         $key3Label.Text = "Key3 app: $key3App"
+        & $updateWindowLayout
     }
 
     $refreshStatus = {
@@ -1070,16 +1110,14 @@ function Start-Ui {
         $advancedPanel.Visible = -not $advancedPanel.Visible
         if ($advancedPanel.Visible) {
             $advancedToggle.Text = "Advanced v"
-            $form.ClientSize = New-Object System.Drawing.Size(520, 470)
         } else {
             $advancedToggle.Text = "Advanced >"
-            $form.ClientSize = New-Object System.Drawing.Size(520, 374)
         }
+        & $updateWindowLayout
     })
 
     & $refreshConfig
     & $refreshStatus
-    $form.ClientSize = New-Object System.Drawing.Size(520, 374)
     [void][System.Windows.Forms.Application]::Run($form)
 }
 
