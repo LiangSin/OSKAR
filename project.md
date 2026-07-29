@@ -115,7 +115,7 @@ The daemon reloads config on every key press, so changing config does not requir
 
 ### Host Actions
 
-All three keys can paste their configured text, open their configured URL, or focus/launch their configured application. Existing config files retain the original defaults: Key1 paste, Key2 URL, and Key3 app.
+All three keys can paste their configured text, open their configured URL, or focus/launch their configured application. Paste text can contain multiple lines; the GUI uses Enter for a new line and `Ctrl+Enter` to save. Existing config files retain the original defaults: Key1 paste, Key2 URL, and Key3 app.
 
 ### Registration Model
 

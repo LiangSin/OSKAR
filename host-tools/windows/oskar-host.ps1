@@ -900,7 +900,8 @@ function Show-EditConfigDialog($Owner) {
     $dialog.FormBorderStyle = "FixedDialog"
     $dialog.MaximizeBox = $false
     $dialog.MinimizeBox = $false
-    $dialog.ClientSize = New-Object System.Drawing.Size(620, 350)
+    $dialog.ClientSize = New-Object System.Drawing.Size(620, 440)
+    $dialog.KeyPreview = $true
 
     $actionDisplay = [ordered]@{
         paste = "Paste text"
@@ -918,6 +919,7 @@ function Show-EditConfigDialog($Owner) {
     }
     $actionBoxes = @{}
     $valueBoxes = @{}
+    $pasteBoxes = @{}
     $valueLabels = @{}
     $chooseButtons = @{}
     $selectedActions = @{}
@@ -927,12 +929,24 @@ function Show-EditConfigDialog($Owner) {
         param([string]$ButtonName)
         $previousAction = $selectedActions[$ButtonName]
         if ($previousAction) {
-            $savedValues[$ButtonName][$previousAction] = $valueBoxes[$ButtonName].Text
+            if ($previousAction -eq "paste") {
+                $savedValues[$ButtonName][$previousAction] = $pasteBoxes[$ButtonName].Text
+            } else {
+                $savedValues[$ButtonName][$previousAction] = $valueBoxes[$ButtonName].Text
+            }
         }
         $action = $displayToAction[[string]$actionBoxes[$ButtonName].SelectedItem]
         $selectedActions[$ButtonName] = $action
         $valueLabels[$ButtonName].Text = $valueLabelDisplay[$action]
-        $valueBoxes[$ButtonName].Text = $savedValues[$ButtonName][$action]
+        if ($action -eq "paste") {
+            $pasteBoxes[$ButtonName].Text = $savedValues[$ButtonName][$action]
+            $pasteBoxes[$ButtonName].Visible = $true
+            $valueBoxes[$ButtonName].Visible = $false
+        } else {
+            $valueBoxes[$ButtonName].Text = $savedValues[$ButtonName][$action]
+            $valueBoxes[$ButtonName].Visible = $true
+            $pasteBoxes[$ButtonName].Visible = $false
+        }
         $chooseButtons[$ButtonName].Visible = $action -eq "app"
     }
 
@@ -940,8 +954,8 @@ function Show-EditConfigDialog($Owner) {
         $buttonName = "key$number"
         $group = New-Object System.Windows.Forms.GroupBox
         $group.Text = "Key $number"
-        $group.Location = New-Object System.Drawing.Point(16, (12 + (($number - 1) * 92)))
-        $group.Size = New-Object System.Drawing.Size(588, 84)
+        $group.Location = New-Object System.Drawing.Point(16, (12 + (($number - 1) * 118)))
+        $group.Size = New-Object System.Drawing.Size(588, 110)
         $dialog.Controls.Add($group)
 
         $actionLabel = New-Object System.Windows.Forms.Label
@@ -973,6 +987,16 @@ function Show-EditConfigDialog($Owner) {
         $valueBox.Size = New-Object System.Drawing.Size(390, 24)
         $group.Controls.Add($valueBox)
         $valueBoxes[$buttonName] = $valueBox
+
+        $pasteBox = New-Object System.Windows.Forms.TextBox
+        $pasteBox.Location = New-Object System.Drawing.Point(82, 53)
+        $pasteBox.Size = New-Object System.Drawing.Size(390, 48)
+        $pasteBox.Multiline = $true
+        $pasteBox.AcceptsReturn = $true
+        $pasteBox.WordWrap = $true
+        $pasteBox.ScrollBars = [System.Windows.Forms.ScrollBars]::Vertical
+        $group.Controls.Add($pasteBox)
+        $pasteBoxes[$buttonName] = $pasteBox
 
         $chooseButton = New-Object System.Windows.Forms.Button
         $chooseButton.Text = "Choose..."
@@ -1006,21 +1030,25 @@ function Show-EditConfigDialog($Owner) {
 
     $cancelButton = New-Object System.Windows.Forms.Button
     $cancelButton.Text = "Cancel"
-    $cancelButton.Location = New-Object System.Drawing.Point(428, 310)
+    $cancelButton.Location = New-Object System.Drawing.Point(428, 400)
     $cancelButton.Size = New-Object System.Drawing.Size(82, 28)
     $cancelButton.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
     $dialog.Controls.Add($cancelButton)
 
     $saveButton = New-Object System.Windows.Forms.Button
     $saveButton.Text = "Save"
-    $saveButton.Location = New-Object System.Drawing.Point(522, 310)
+    $saveButton.Location = New-Object System.Drawing.Point(522, 400)
     $saveButton.Size = New-Object System.Drawing.Size(82, 28)
     $saveButton.Add_Click({
         $newConfig = New-DefaultConfig
         foreach ($number in 1..3) {
             $buttonName = "key$number"
             $action = $selectedActions[$buttonName]
-            $savedValues[$buttonName][$action] = $valueBoxes[$buttonName].Text
+            if ($action -eq "paste") {
+                $savedValues[$buttonName][$action] = $pasteBoxes[$buttonName].Text
+            } else {
+                $savedValues[$buttonName][$action] = $valueBoxes[$buttonName].Text
+            }
             $newConfig["${buttonName}_action"] = $action
             $newConfig["${buttonName}_text"] = $savedValues[$buttonName]["paste"]
             $newConfig["${buttonName}_url"] = $savedValues[$buttonName]["url"]
@@ -1032,8 +1060,14 @@ function Show-EditConfigDialog($Owner) {
     })
     $dialog.Controls.Add($saveButton)
 
-    $dialog.AcceptButton = $saveButton
     $dialog.CancelButton = $cancelButton
+    $dialog.Add_KeyDown({
+        param($_sender, $eventArgs)
+        if ($eventArgs.Control -and $eventArgs.KeyCode -eq [System.Windows.Forms.Keys]::Enter) {
+            $saveButton.PerformClick()
+            $eventArgs.SuppressKeyPress = $true
+        }
+    })
     [void]$dialog.ShowDialog($Owner)
 }
 

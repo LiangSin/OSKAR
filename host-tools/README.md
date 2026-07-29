@@ -85,7 +85,7 @@ cd /path/to/host-tools/linux
 
 The GUI opens with the current config at the top. If the config file does not exist, the GUI creates it automatically.
 
-Use `Edit` to choose each key's action from its dropdown and configure the corresponding text, URL, or application. When `Open app` is selected, `Choose...` searches installed desktop applications by name or launch command.
+Use `Edit` to choose each key's action from its dropdown and configure the corresponding text, URL, or application. Paste text accepts multiple lines: press Enter to add a line, then click `Save` or press `Ctrl+Enter` to save. When `Open app` is selected, `Choose...` searches installed desktop applications by name or launch command.
 
 The daemon section shows whether the host daemon is running. Use `Refresh`, `Logs`, `Start Daemon`, and `Stop Daemon` from the GUI. When starting or installing the Linux daemon from the GUI, the tool imports the current desktop environment into the user service so clipboard helpers can find Wayland or X11.
 
@@ -186,6 +186,8 @@ key3_app=
 ```
 
 Each key retains all three values when its action changes, so switching away from an action and back does not discard its previous config. Existing config files without `keyN_action` keep the original default mapping: Key1 paste, Key2 URL, and Key3 app.
+
+Multiline paste text is stored on one config-file line using escaped `\n` characters and is restored to real line breaks before it is copied to the clipboard.
 
 ## Current Limitations
 

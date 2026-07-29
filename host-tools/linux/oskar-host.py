@@ -797,6 +797,8 @@ def show_edit_config_dialog(parent, on_saved):
     action_vars = {}
     value_vars = {}
     entries = {}
+    paste_frames = {}
+    paste_texts = {}
     config_labels = {}
     browse_buttons = {}
     label_to_action = {label: action for action, label in ACTION_LABELS.items()}
@@ -804,14 +806,21 @@ def show_edit_config_dialog(parent, on_saved):
     def refresh_row(number):
         button = f"key{number}"
         action = label_to_action[action_vars[button].get()]
-        entries[button].configure(textvariable=value_vars[button][action])
         config_labels[button].configure(
             text={"paste": "Text", "url": "URL", "app": "Application"}[action]
         )
-        if action == "app":
-            browse_buttons[button].grid()
-        else:
+        if action == "paste":
+            entries[button].grid_remove()
+            paste_frames[button].grid()
             browse_buttons[button].grid_remove()
+        else:
+            paste_frames[button].grid_remove()
+            entries[button].configure(textvariable=value_vars[button][action])
+            entries[button].grid()
+            if action == "app":
+                browse_buttons[button].grid()
+            else:
+                browse_buttons[button].grid_remove()
 
     def browse_app(number):
         button = f"key{number}"
@@ -838,12 +847,27 @@ def show_edit_config_dialog(parent, on_saved):
 
         value_vars[button] = {
             action: tk.StringVar(value=config[f"{button}_{suffix}"])
-            for action, suffix in (("paste", "text"), ("url", "url"), ("app", "app"))
+            for action, suffix in (("url", "url"), ("app", "app"))
         }
         config_labels[button] = ttk.Label(group)
         config_labels[button].grid(row=1, column=0, sticky="w", padx=(0, 10), pady=(8, 0))
         entries[button] = ttk.Entry(group, width=52)
         entries[button].grid(row=1, column=1, sticky="ew", pady=(8, 0))
+
+        paste_frame = ttk.Frame(group)
+        paste_frame.grid(row=1, column=1, sticky="ew", pady=(8, 0))
+        paste_frame.columnconfigure(0, weight=1)
+        paste_text = tk.Text(paste_frame, height=4, wrap="word", padx=5, pady=4)
+        paste_text.insert("1.0", config[f"{button}_text"])
+        paste_text.grid(row=0, column=0, sticky="ew")
+        paste_scrollbar = ttk.Scrollbar(
+            paste_frame, orient="vertical", command=paste_text.yview
+        )
+        paste_scrollbar.grid(row=0, column=1, sticky="ns")
+        paste_text.configure(yscrollcommand=paste_scrollbar.set)
+        paste_frames[button] = paste_frame
+        paste_texts[button] = paste_text
+
         browse_buttons[button] = ttk.Button(
             group, text="Choose...", command=lambda n=number: browse_app(n)
         )
@@ -862,7 +886,8 @@ def show_edit_config_dialog(parent, on_saved):
         for number in range(1, 4):
             button = f"key{number}"
             new_config[f"{button}_action"] = label_to_action[action_vars[button].get()]
-            for action, suffix in (("paste", "text"), ("url", "url"), ("app", "app")):
+            new_config[f"{button}_text"] = paste_texts[button].get("1.0", "end-1c")
+            for action, suffix in (("url", "url"), ("app", "app")):
                 new_config[f"{button}_{suffix}"] = value_vars[button][action].get()
         save_config(new_config)
         on_saved()
@@ -871,9 +896,16 @@ def show_edit_config_dialog(parent, on_saved):
     ttk.Button(buttons, text="Cancel", command=cancel).grid(row=0, column=0, padx=(0, 8))
     ttk.Button(buttons, text="Save", command=save).grid(row=0, column=1)
 
+    def save_shortcut(_event):
+        save()
+        return "break"
+
     dialog.bind("<Escape>", lambda _event: cancel())
-    dialog.bind("<Return>", lambda _event: save())
-    entries["key1"].focus_set()
+    dialog.bind("<Control-Return>", save_shortcut)
+    if label_to_action[action_vars["key1"].get()] == "paste":
+        paste_texts["key1"].focus_set()
+    else:
+        entries["key1"].focus_set()
     parent.wait_window(dialog)
 
 
